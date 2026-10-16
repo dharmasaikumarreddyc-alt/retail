@@ -1,8 +1,10 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import ProductModal from './ProductModal';
+import { getAuthenticatedSession } from '../lib/auth';
 
 interface Product {
   id: string | number;
@@ -22,37 +24,53 @@ interface Product {
 }
 
 export default function ProductList() {
+  const router = useRouter();
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
 
-  useEffect(() => {
-    fetchProducts();
-  }, []);
-
-  const fetchProducts = async (category?: string) => {
+  const fetchProducts = useCallback(async (category?: string, search?: string, signal?: AbortSignal) => {
     try {
       setLoading(true);
-      const url = category
-        ? `/api/products?category=${category}`
-        : '/api/products';
-
-      const response = await fetch(url);
+      const params = new URLSearchParams();
+      if (category) params.set('category', category);
+      if (search) params.set('search', search);
+      const response = await fetch(`/api/products${params.size ? `?${params}` : ''}`, { signal });
       const data = await response.json();
 
-      if (data.success) {
+      if (!signal?.aborted && data.success) {
         setProducts(data.products);
-      } else {
+      } else if (!signal?.aborted) {
         setError('Failed to load products');
       }
     } catch (err) {
-      setError('Error fetching products');
-      console.error(err);
+      if (!signal?.aborted) {
+        setError('Error fetching products');
+        console.error(err);
+      }
     } finally {
-      setLoading(false);
+      if (!signal?.aborted) setLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    const loadShop = async () => {
+      const customerSession = await getAuthenticatedSession('customer');
+      const merchantSession = await getAuthenticatedSession('merchant');
+      if (controller.signal.aborted) return;
+      if (merchantSession && !customerSession) {
+        router.replace('/login');
+        return;
+      }
+
+      const params = new URLSearchParams(window.location.search);
+      await fetchProducts(params.get('category') || undefined, params.get('search') || undefined, controller.signal);
+    };
+    void loadShop();
+    return () => controller.abort();
+  }, [fetchProducts, router]);
 
   // Helper function to render star rating
   const renderStars = (rating: number) => {
@@ -94,6 +112,11 @@ export default function ProductList() {
 
   return (
     <>
+      {products.length === 0 && (
+        <div className="alert alert-light text-center" role="status">
+          No food or drinks match this search. Try coffee, bakery, breakfast, or dosa.
+        </div>
+      )}
       {/* List View */}
       <div className="tab-pane fade" id="tab-list-list" role="tabpanel" aria-labelledby="tab-list-list-btn">
         <div className="row">

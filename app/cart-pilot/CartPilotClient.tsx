@@ -3,6 +3,8 @@
 import { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { useVoice, interpretYesNo } from '../components/useVoice';
+import { backendUrl } from '../lib/backend';
+import { getAuthenticatedSession } from '../lib/auth';
 
 interface AgentStep {
   id: string;
@@ -48,6 +50,13 @@ interface Address {
   isDefault: boolean;
 }
 
+function formatDeliveryAddress(address?: Address): string {
+  if (!address) return 'Pickup';
+  return [address.street, address.city, address.state, address.zipCode]
+    .filter(Boolean)
+    .join(', ') || address.label || 'Pickup';
+}
+
 interface AIProposal {
   merchant: Merchant;
   items: CartItem[];
@@ -60,6 +69,8 @@ interface AIProposal {
     total: number;
   };
   reasoning: string;
+  hasAlternatives?: boolean;
+  alternativeMessage?: string;
 }
 
 type FlowStep = 'input' | 'thinking' | 'choosing' | 'proposal' | 'processing' | 'confirmed' | 'smart-cart' | 'budget-shop' | 'predictions';
@@ -172,6 +183,30 @@ function isStopCommand(text: string): boolean {
   return /\b(stop|cancel|exit|quit|turn off)\b/.test(text.toLowerCase());
 }
 
+async function collectConfirmedCookingInstructions(
+  askQuestion: (prompt: string) => Promise<string>,
+  speakResponse: (message: string) => Promise<void>
+): Promise<string | null> {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const response = await askQuestion(
+      attempt === 0
+        ? 'Any cooking instructions for the restaurant? Say them now, or say no instructions.'
+        : 'Please tell me the cooking instructions again, or say no instructions.'
+    );
+    const instructions = response?.trim() || '';
+    if (!instructions || /^(no|none|no instructions|nothing|no thanks|no,?\s+thanks)$/i.test(instructions)) {
+      return '';
+    }
+
+    await speakResponse(`I heard: ${instructions}. Is that correct?`);
+    const confirmed = interpretYesNo(await askQuestion('Please say yes to confirm, or no to repeat the instructions.'));
+    if (confirmed === 'yes') return instructions;
+  }
+
+  await speakResponse("I couldn't confirm the cooking instructions, so I haven't added any. You can add them before checkout.");
+  return null;
+}
+
 const GOODBYES = [
   'Anytime! It was a pleasure helping you. Talk soon!',
   'Happy to help — have a wonderful day!',
@@ -252,7 +287,8 @@ interface PaymentResult {
     merchantId: string;
     merchantName: string;
     merchantAddress: string;
-    items: Array<{ productId: string; name: string; price: number; quantity: number; total: number }>;
+    items: Array<{ productId: string; name: string; price: number; quantity: number; total: number; cookingInstructions?: string }>;
+    cookingInstructions?: string;
     pricing: {
       subtotal: number;
       serviceFee: number;
@@ -268,9 +304,10 @@ interface PaymentResult {
     token: string;
     method: string;
     status: string;
-    message: string;
     cardBrand?: string;
     last4?: string;
+    upiApp?: string;
+    walletType?: string;
     tokenized?: boolean;
   };
   loyalty: {
@@ -283,24 +320,27 @@ async function processPayment(
   merchantId: string,
   items: { productId: string; quantity: number; name?: string; price?: number }[],
   paymentMethod: 'card' | 'upi' | 'wallet' | 'cod',
-  upiId?: string
+  deliveryAddress: string,
+  cookingInstructions = ''
 ): Promise<PaymentResult> {
-  const response = await fetch('/api/agents/payment', {
+  const session = await getAuthenticatedSession('customer');
+  if (!session) throw new Error('Sign in with a customer account to place an order.');
+
+  const headers = {
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${session.token}`,
+  };
+  const response = await fetch(`${backendUrl}/payments/checkout`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ merchantId, items, paymentMethod, upiId }),
+    headers,
+    body: JSON.stringify({ merchantId, items, paymentMethod, deliveryAddress, cookingInstructions }),
   });
   const data = await response.json();
-  if (!data.success) throw new Error(data.error);
-  return data;
-}
-
-async function saveOrder(orderData: any): Promise<void> {
-  await fetch('/api/orders', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(orderData),
-  });
+  if (!response.ok) {
+    throw new Error(data.detail || data.error || 'Could not start checkout.');
+  }
+  if (!data.order) throw new Error('The order service returned an invalid response.');
+  return data as PaymentResult;
 }
 
 // Smart Cart API
@@ -428,7 +468,6 @@ export default function CartPilotClient() {
   // Payment method selection
   type PaymentMethod = 'card' | 'upi' | 'wallet' | 'cod';
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<PaymentMethod>('upi');
-  const [upiId, setUpiId] = useState('');
 
   // Live streamed agent narration (shown during the "thinking" phase)
   const [narration, setNarration] = useState('');
@@ -587,38 +626,15 @@ export default function CartPilotClient() {
 
       // Process payment for each merchant
       const results: PaymentResult[] = [];
+      const defaultAddress = addresses.find(a => a.isDefault) || addresses[0];
       for (const [merchantId, items] of merchantGroups) {
         const paymentResult = await processPayment(
           merchantId,
           items.map(i => ({ productId: i.productId, quantity: i.quantity || 1, name: i.name, price: i.price })),
           selectedPaymentMethod,
-          selectedPaymentMethod === 'upi' ? upiId : undefined
+          formatDeliveryAddress(defaultAddress)
         );
         results.push(paymentResult);
-
-        // Save order
-        const defaultAddress = addresses.find(a => a.isDefault) || addresses[0];
-        await saveOrder({
-          id: paymentResult.order.orderId,
-          merchantId: paymentResult.order.merchantId,
-          merchantName: paymentResult.order.merchantName,
-          merchantAddress: paymentResult.order.merchantAddress,
-          items: items.map(item => ({
-            productId: item.productId,
-            name: item.name,
-            price: item.price,
-            quantity: item.quantity || 1,
-            image: item.image,
-          })),
-          pricing: paymentResult.order.pricing,
-          payment: paymentResult.payment,
-          status: 'confirmed',
-          loyaltyPointsEarned: paymentResult.loyalty.pointsEarned,
-          createdAt: new Date().toISOString(),
-          estimatedReady: paymentResult.order.estimatedReady,
-          deliveryAddress: defaultAddress,
-          timeline: [{ status: 'Order Placed', time: new Date().toISOString(), description: 'Your order has been received' }],
-        });
       }
 
       // Show confirmation with first order result
@@ -657,38 +673,15 @@ export default function CartPilotClient() {
 
       // Process payment for each merchant
       const results: PaymentResult[] = [];
+      const defaultAddress = addresses.find(a => a.isDefault) || addresses[0];
       for (const [merchantId, items] of merchantGroups) {
         const paymentResult = await processPayment(
           merchantId,
           items.map(i => ({ productId: i.productId, quantity: i.quantity || 1, name: i.name, price: i.price })),
           selectedPaymentMethod,
-          selectedPaymentMethod === 'upi' ? upiId : undefined
+          formatDeliveryAddress(defaultAddress)
         );
         results.push(paymentResult);
-
-        // Save order
-        const defaultAddress = addresses.find(a => a.isDefault) || addresses[0];
-        await saveOrder({
-          id: paymentResult.order.orderId,
-          merchantId: paymentResult.order.merchantId,
-          merchantName: paymentResult.order.merchantName,
-          merchantAddress: paymentResult.order.merchantAddress,
-          items: items.map(item => ({
-            productId: item.productId,
-            name: item.name,
-            price: item.price,
-            quantity: item.quantity || 1,
-            image: item.image,
-          })),
-          pricing: paymentResult.order.pricing,
-          payment: paymentResult.payment,
-          status: 'confirmed',
-          loyaltyPointsEarned: paymentResult.loyalty.pointsEarned,
-          createdAt: new Date().toISOString(),
-          estimatedReady: paymentResult.order.estimatedReady,
-          deliveryAddress: defaultAddress,
-          timeline: [{ status: 'Order Placed', time: new Date().toISOString(), description: 'Your order has been received' }],
-        });
       }
 
       // Show confirmation
@@ -726,37 +719,15 @@ export default function CartPilotClient() {
       }
 
       const results: PaymentResult[] = [];
+      const defaultAddress = addresses.find(a => a.isDefault) || addresses[0];
       for (const [merchantId, items] of merchantGroups) {
         const paymentResult = await processPayment(
           merchantId,
           items.map(i => ({ productId: i.productId, quantity: 1, name: i.name, price: i.price })),
           selectedPaymentMethod,
-          selectedPaymentMethod === 'upi' ? upiId : undefined
+          formatDeliveryAddress(defaultAddress)
         );
         results.push(paymentResult);
-
-        const defaultAddress = addresses.find(a => a.isDefault) || addresses[0];
-        await saveOrder({
-          id: paymentResult.order.orderId,
-          merchantId: paymentResult.order.merchantId,
-          merchantName: paymentResult.order.merchantName,
-          merchantAddress: paymentResult.order.merchantAddress,
-          items: items.map(item => ({
-            productId: item.productId,
-            name: item.name,
-            price: item.price,
-            quantity: 1,
-            image: item.image,
-          })),
-          pricing: paymentResult.order.pricing,
-          payment: paymentResult.payment,
-          status: 'confirmed',
-          loyaltyPointsEarned: paymentResult.loyalty.pointsEarned,
-          createdAt: new Date().toISOString(),
-          estimatedReady: paymentResult.order.estimatedReady,
-          deliveryAddress: defaultAddress,
-          timeline: [{ status: 'Order Placed', time: new Date().toISOString(), description: 'Your order has been received' }],
-        });
       }
 
       if (results.length > 0) {
@@ -935,7 +906,9 @@ export default function CartPilotClient() {
         },
         reasoning:
           [discoverResult.spoken, inventoryResult.spoken].filter(Boolean).join(' ') ||
-          `Based on your request "${query}", I found ${bestMerchant.name} which has ${bestMerchant.offers[0]}. I've selected ${selectedProducts.length} item${selectedProducts.length > 1 ? 's' : ''} that match what you're looking for.`
+          `Based on your request "${query}", I found ${bestMerchant.name} which has ${bestMerchant.offers[0]}. I've selected ${selectedProducts.length} item${selectedProducts.length > 1 ? 's' : ''} that match what you're looking for.`,
+        hasAlternatives: isAlternative,
+        alternativeMessage: inventoryResult.alternativeMessage,
       };
 
       setProposal(aiProposal);
@@ -995,7 +968,11 @@ export default function CartPilotClient() {
       reasoning:
         inventoryResult.spoken ||
         `${merchant.name}: I've selected ${selectedProducts.length} item${selectedProducts.length > 1 ? 's' : ''} for you.`,
+      hasAlternatives: inventoryResult.hasAlternatives && !inventoryResult.exactMatchFound,
+      alternativeMessage: inventoryResult.alternativeMessage,
     };
+    setHasAlternatives(proposal.hasAlternatives || false);
+    setAlternativeMessage(proposal.alternativeMessage || '');
     setProposal(proposal);
     return proposal;
   };
@@ -1115,6 +1092,15 @@ export default function CartPilotClient() {
       setFlowStep('input');
       return false;
     }
+    if (proposal.hasAlternatives && proposal.alternativeMessage) {
+      const alternativeDecision = interpretYesNo(await ask(proposal.alternativeMessage));
+      if (!assistantActiveRef.current) return false;
+      if (alternativeDecision !== 'yes') {
+        await say("Okay, I won't add those alternatives. Tell me what you'd like to order instead.");
+        setFlowStep('input');
+        return false;
+      }
+    }
     updateStepStatus('3', 'completed', [`${proposal.items.length} item${proposal.items.length > 1 ? 's' : ''} selected`, `Total: $${proposal.pricing.total.toFixed(2)}`]);
     setFlowStep('proposal');
     setProposal(proposal);
@@ -1183,42 +1169,31 @@ export default function CartPilotClient() {
       }
     }
 
+    const cookingInstructions = await collectConfirmedCookingInstructions(
+      (prompt) => ask(prompt),
+      say
+    );
+    if (cookingInstructions === null || !assistantActiveRef.current) {
+      setFlowStep('input');
+      return false;
+    }
+    if (!assistantActiveRef.current) return false;
+
     // Ask for payment method
-    let paymentResponse = await ask("How would you like to pay? Say UPI, Card, Wallet, or Cash on Delivery.");
+    let paymentResponse = await ask(
+      'Choose UPI, Card, Wallet, or Cash on Delivery.'
+    );
     if (!assistantActiveRef.current) return false;
 
     let chosenPaymentMethod: PaymentMethod = 'upi';
-    let chosenUpiId: string = 'user@paytm';
 
     if (paymentResponse) {
       const parsedMethod = parsePaymentMethod(paymentResponse);
       if (parsedMethod) {
         chosenPaymentMethod = parsedMethod;
         setSelectedPaymentMethod(parsedMethod);
-
-        if (parsedMethod === 'upi') {
-          const upiResponse = await ask("Which UPI app? Say Paytm, Google Pay, or PhonePe.");
-          if (!assistantActiveRef.current) return false;
-          if (upiResponse) {
-            const t = upiResponse.toLowerCase();
-            if (t.includes('paytm')) {
-              chosenUpiId = 'user@paytm';
-              await say('Using Paytm UPI.');
-            } else if (t.includes('google') || t.includes('gpay')) {
-              chosenUpiId = 'user@gpay';
-              await say('Using Google Pay.');
-            } else if (t.includes('phonepe') || t.includes('phone pe')) {
-              chosenUpiId = 'user@phonepe';
-              await say('Using PhonePe.');
-            } else {
-              chosenUpiId = 'user@paytm';
-              await say('Using Paytm UPI as default.');
-            }
-          }
-          setUpiId(chosenUpiId);
-        }
       } else {
-        await say("I'll use UPI with Paytm as default.");
+        await say('UPI is selected.');
       }
     }
 
@@ -1227,8 +1202,9 @@ export default function CartPilotClient() {
                       chosenPaymentMethod === 'wallet' ? 'Wallet' : 'Cash on Delivery';
 
     // Final confirmation
+    await say(`${methodName} is selected as your mode of payment.`);
     const finalConfirm = await ask(
-      `Great! Paying ${currentProposal.pricing.total.toFixed(0)} dollars via ${methodName}. Shall I place the order now?`
+      `Your order total is ${currentProposal.pricing.total.toFixed(0)} dollars. Shall I place the order?`
     );
     if (!assistantActiveRef.current) return false;
 
@@ -1245,8 +1221,14 @@ export default function CartPilotClient() {
     // Step 4: Process payment
     updateStepStatus('4', 'active');
     setVoiceCaption('🔊 Placing your order…');
-    await handleConfirmOrder(currentProposal, chosenPaymentMethod, chosenPaymentMethod === 'upi' ? chosenUpiId : undefined);
-    updateStepStatus('4', 'completed', ['Order confirmed!', `Payment: ${chosenPaymentMethod.toUpperCase()}`]);
+    const orderConfirmed = await handleConfirmOrder(currentProposal, chosenPaymentMethod, cookingInstructions);
+    if (!orderConfirmed) {
+      updateStepStatus('4', 'error', ['Order could not be confirmed.']);
+      return false;
+    }
+    updateStepStatus('4', 'completed', [
+      'Order confirmed!',
+    ]);
     return true;
     } catch {
       setError('Something went wrong. Please try again.');
@@ -1333,51 +1315,25 @@ export default function CartPilotClient() {
   const handleConfirmOrder = async (
     p: AIProposal | null = proposal,
     overridePaymentMethod?: PaymentMethod,
-    overrideUpiId?: string
-  ) => {
-    if (!p) return;
+    overrideCookingInstructions = ''
+  ): Promise<boolean> => {
+    if (!p) return false;
 
     setFlowStep('processing');
 
     // Use override if provided (for voice flow), otherwise use state
     const paymentMethodToUse = overridePaymentMethod || selectedPaymentMethod;
-    const upiIdToUse = overrideUpiId || upiId;
 
     try {
       const items = p.items.map(item => ({ productId: item.id, quantity: item.selectedQuantity }));
-      const paymentResult = await processPayment(p.merchant.id, items, paymentMethodToUse, paymentMethodToUse === 'upi' ? upiIdToUse : undefined);
+      const paymentResult = await processPayment(
+        p.merchant.id,
+        items,
+        paymentMethodToUse,
+        formatDeliveryAddress(p.address),
+        overrideCookingInstructions
+      );
       setOrderResult(paymentResult);
-
-      // Save order to database
-      const orderToSave = {
-        id: paymentResult.order.orderId,
-        merchantId: paymentResult.order.merchantId,
-        merchantName: paymentResult.order.merchantName,
-        merchantAddress: paymentResult.order.merchantAddress,
-        items: p.items.map(item => ({
-          productId: item.id,
-          name: item.name,
-          price: item.price,
-          quantity: item.selectedQuantity,
-          image: item.image,
-        })),
-        pricing: paymentResult.order.pricing,
-        payment: {
-          token: paymentResult.payment.token,
-          method: paymentResult.payment.method,
-          status: paymentResult.payment.status,
-        },
-        status: 'confirmed',
-        loyaltyPointsEarned: paymentResult.loyalty.pointsEarned,
-        createdAt: new Date().toISOString(),
-        estimatedReady: paymentResult.order.estimatedReady,
-        deliveryAddress: p.address,
-        timeline: [
-          { status: 'Order Placed', time: new Date().toISOString(), description: 'Your order has been received' },
-        ],
-      };
-
-      await saveOrder(orderToSave);
       setFlowStep('confirmed');
 
       // AI-generated receipt summary shown on screen.
@@ -1392,14 +1348,16 @@ export default function CartPilotClient() {
 
       // Voice: speak a very concise confirmation (not the full receipt).
       if (voiceMode && voiceSupported) {
-        const concise = `Done! Order placed at ${p.merchant.name}. ${paymentResult.order.pricing.total.toFixed(0)} dollars, ready in ${paymentResult.order.estimatedReady}. You earned ${paymentResult.loyalty.pointsEarned} reward points.`;
+        const concise = `Your order was placed successfully at ${p.merchant.name}. The total is ${paymentResult.order.pricing.total.toFixed(0)} dollars, ready in ${paymentResult.order.estimatedReady}.`;
         setVoiceCaption('🔊 ' + concise);
         await speak(concise);
       }
 
+      return true;
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Payment failed');
+      setError(err instanceof Error ? err.message : paymentMethodToUse === 'card' ? 'Payment failed' : 'Could not place the order.');
       setFlowStep('proposal');
+      return false;
     }
   };
 
@@ -1474,6 +1432,15 @@ export default function CartPilotClient() {
   const runVoiceConfirm = async (p: AIProposal) => {
     let currentProposal = p;
 
+    if (p.hasAlternatives && p.alternativeMessage) {
+      const answer = interpretYesNo(await askAndListen(p.alternativeMessage));
+      if (answer !== 'yes') {
+        await speak("Okay, I won't add those alternatives. Tell me what you'd like to order instead.");
+        setFlowStep('input');
+        return;
+      }
+    }
+
     // List items and ask for confirmation or modifications
     const itemsList = currentProposal.items.map(i => i.name).join(' and ');
     const summary = `${p.reasoning} I've added ${itemsList} to your cart. Your total is ${currentProposal.pricing.total.toFixed(0)} dollars. Would you like to remove anything or proceed to payment?`;
@@ -1511,75 +1478,58 @@ export default function CartPilotClient() {
       }
     }
 
+    const cookingInstructions = await collectConfirmedCookingInstructions(
+      askAndListen,
+      speak
+    );
+    if (cookingInstructions === null) {
+      setFlowStep('input');
+      return;
+    }
+
     // Ask for payment method
     let paymentQuestion = await askAndListen(
-      `How would you like to pay? You can say UPI, Card, Wallet, or Cash on Delivery.`
+      'How would you like to pay? You can say UPI, Card, Wallet, or Cash on Delivery.'
     );
 
     // Retry if no response
     if (!paymentQuestion) {
-      paymentQuestion = await askAndListen('Sorry, I didn\'t catch that. Say UPI, Card, Wallet, or Cash on Delivery.');
+      paymentQuestion = await askAndListen('Sorry, I didn\'t catch that. Choose UPI, Card, Wallet, or Cash on Delivery.');
     }
 
     let chosenPaymentMethod: PaymentMethod = 'upi';
-    let chosenUpiId: string = 'user@paytm';
 
     if (paymentQuestion) {
       const parsedMethod = parsePaymentMethod(paymentQuestion);
       if (parsedMethod) {
         chosenPaymentMethod = parsedMethod;
         setSelectedPaymentMethod(parsedMethod);
-
-        // If UPI, ask for UPI ID
-        if (parsedMethod === 'upi') {
-          const upiResponse = await askAndListen('Which UPI app? Say Paytm, Google Pay, or PhonePe.');
-          if (upiResponse) {
-            const t = upiResponse.toLowerCase();
-            if (t.includes('paytm')) {
-              chosenUpiId = 'user@paytm';
-              setUpiId('user@paytm');
-              await speak('Using Paytm UPI.');
-            } else if (t.includes('google') || t.includes('gpay')) {
-              chosenUpiId = 'user@gpay';
-              setUpiId('user@gpay');
-              await speak('Using Google Pay.');
-            } else if (t.includes('phonepe') || t.includes('phone pe')) {
-              chosenUpiId = 'user@phonepe';
-              setUpiId('user@phonepe');
-              await speak('Using PhonePe.');
-            } else {
-              chosenUpiId = 'user@upi';
-              setUpiId('user@upi');
-              await speak('Using UPI.');
-            }
-          }
-        }
       } else {
-        // Default to UPI if not understood
-        await speak('I\'ll use UPI with Paytm as default.');
+        // Default to UPI if not understood.
+        await speak('UPI is selected.');
       }
     } else {
       // No response, use default
-      await speak('Using UPI with Paytm as default payment.');
+      await speak('UPI is selected.');
     }
 
     setSelectedPaymentMethod(chosenPaymentMethod);
-    if (chosenPaymentMethod === 'upi') {
-      setUpiId(chosenUpiId);
-    }
 
     const methodName = chosenPaymentMethod === 'upi' ? 'UPI' :
                       chosenPaymentMethod === 'card' ? 'Card' :
                       chosenPaymentMethod === 'wallet' ? 'Wallet' : 'Cash on Delivery';
 
+    await speak(`${methodName} is selected as your mode of payment.`);
     const finalConfirm = interpretYesNo(
-      await askAndListen(`Great! Paying ${currentProposal.pricing.total.toFixed(0)} dollars via ${methodName}. Shall I place the order now?`)
+      await askAndListen(
+        `Your order total is ${currentProposal.pricing.total.toFixed(0)} dollars. Shall I place the order?`
+      )
     );
 
     if (finalConfirm === 'yes' || finalConfirm === 'unknown') {
       // If unclear, default to yes for better UX
       await speak('Perfect. Placing your order now.');
-      void handleConfirmOrder(currentProposal, chosenPaymentMethod, chosenPaymentMethod === 'upi' ? chosenUpiId : undefined);
+      void handleConfirmOrder(currentProposal, chosenPaymentMethod, cookingInstructions);
     } else {
       await speak('Order cancelled. Let me know when you\'re ready.');
     }
@@ -1684,6 +1634,9 @@ export default function CartPilotClient() {
       updateStepStatus('3', 'active');
       const inventoryResult = await fetchInventory(merchant.id, userQuery);
       setAllProducts(inventoryResult.products);
+      const isAlternative = inventoryResult.hasAlternatives && !inventoryResult.exactMatchFound;
+      setHasAlternatives(isAlternative || false);
+      setAlternativeMessage(inventoryResult.alternativeMessage || '');
 
       const selectedProducts: CartItem[] = inventoryResult.products.slice(0, 2).map(p => ({
         ...p,
@@ -1710,7 +1663,9 @@ export default function CartPilotClient() {
           tax: parseFloat(tax.toFixed(2)),
           total: parseFloat(total.toFixed(2)),
         },
-        reasoning: `Switched to ${merchant.name}. ${merchant.offers[0]}`
+        reasoning: inventoryResult.spoken || `Switched to ${merchant.name}. ${merchant.offers[0]}`,
+        hasAlternatives: isAlternative,
+        alternativeMessage: inventoryResult.alternativeMessage,
       });
 
       setFlowStep('proposal');
@@ -1892,6 +1847,9 @@ export default function CartPilotClient() {
                       {error && (
                         <div className="alert alert-warning mb-4" role="alert">
                           <i className="fas fa-exclamation-triangle me-2"></i>{error}
+                          {error.includes('address') && (
+                            <Link href="/account/address" className="d-block mt-2">Add a delivery address</Link>
+                          )}
                         </div>
                       )}
 
@@ -2128,10 +2086,10 @@ export default function CartPilotClient() {
                       </div>
                       <div className="d-flex flex-wrap gap-2 mb-4">
                         {[
-                          'Get me fresh bananas and milk',
-                          'I need coffee and pastry',
-                          'Order some fresh bread from the bakery',
-                          'Get organic vegetables for dinner',
+                          'Get an oat milk latte and almond croissant',
+                          'Order fresh orange juice and a blueberry muffin',
+                          'Find vegan avocado toast for breakfast',
+                          'Show me masala dosa from the local restaurant',
                         ].map((suggestion, idx) => (
                           <button
                             key={idx}
@@ -2609,45 +2567,6 @@ export default function CartPilotClient() {
                           </div>
                         </div>
 
-                        {/* UPI ID Input */}
-                        {selectedPaymentMethod === 'upi' && (
-                          <div className="mt-3">
-                            <label className="form-label small text-muted">UPI ID</label>
-                            <div className="input-group">
-                              <span className="input-group-text"><i className="fas fa-at"></i></span>
-                              <input
-                                type="text"
-                                className="form-control"
-                                placeholder="yourname@paytm"
-                                value={upiId}
-                                onChange={(e) => setUpiId(e.target.value)}
-                              />
-                            </div>
-                            <div className="d-flex gap-2 mt-2">
-                              <button
-                                type="button"
-                                className={`btn btn-sm ${upiId.includes('@paytm') ? 'btn-success' : 'btn-outline-secondary'}`}
-                                onClick={() => setUpiId(upiId.split('@')[0] + '@paytm')}
-                              >
-                                Paytm
-                              </button>
-                              <button
-                                type="button"
-                                className={`btn btn-sm ${upiId.includes('@gpay') ? 'btn-success' : 'btn-outline-secondary'}`}
-                                onClick={() => setUpiId(upiId.split('@')[0] + '@gpay')}
-                              >
-                                GPay
-                              </button>
-                              <button
-                                type="button"
-                                className={`btn btn-sm ${upiId.includes('@phonepe') ? 'btn-success' : 'btn-outline-secondary'}`}
-                                onClick={() => setUpiId(upiId.split('@')[0] + '@phonepe')}
-                              >
-                                PhonePe
-                              </button>
-                            </div>
-                          </div>
-                        )}
                       </div>
 
                       {/* Action Buttons */}
@@ -2655,12 +2574,10 @@ export default function CartPilotClient() {
                         <button
                           className="btn btn-primary btn-lg flex-grow-1"
                           onClick={() => handleConfirmOrder()}
-                          disabled={proposal.items.length === 0 || (selectedPaymentMethod === 'upi' && !upiId)}
+                          disabled={proposal.items.length === 0}
                         >
                           <i className="fas fa-check-circle me-2"></i>
-                          {selectedPaymentMethod === 'upi' ? 'Pay via UPI' :
-                           selectedPaymentMethod === 'card' ? 'Pay with Card' :
-                           selectedPaymentMethod === 'wallet' ? 'Pay from Wallet' : 'Place Order (COD)'} • ${proposal.pricing.total.toFixed(2)}
+                          Place Order • ${proposal.pricing.total.toFixed(2)}
                         </button>
                         <button className="btn btn-outline-secondary" onClick={resetFlow}>
                           <i className="fas fa-times"></i>
@@ -2756,7 +2673,9 @@ export default function CartPilotClient() {
                     </div>
                     <div className="p-5 text-center">
                       <div className="spinner-border text-primary mb-3" role="status" style={{ width: '3rem', height: '3rem' }}></div>
-                      <p className="text-muted mb-0">Processing payment securely...</p>
+                      <p className="text-muted mb-0">
+                        Placing your prototype order...
+                      </p>
                     </div>
                   </>
                 )}
@@ -2813,30 +2732,44 @@ export default function CartPilotClient() {
                           </div>
                         )}
                         <div className="d-flex justify-content-between align-items-center mt-2">
-                          <strong style={{ fontSize: '1.15rem' }}>Total Paid</strong>
+                          <strong style={{ fontSize: '1.15rem' }}>
+                            {orderResult.payment.status === 'captured' ? 'Total Paid' : 'Order Total'}
+                          </strong>
                           <strong className="text-primary" style={{ fontSize: '1.5rem' }}>
                             ${orderResult.order.pricing.total.toFixed(2)}
                           </strong>
                         </div>
-                        <div className="d-flex align-items-center mt-3">
-                          <span className="badge bg-light text-dark border me-2" style={{ fontSize: '0.85rem', padding: '6px 10px' }}>
-                            {orderResult.payment.method === 'upi' ? (
+                        <div className="d-flex flex-column flex-sm-row align-items-sm-center gap-2 mt-3">
+                          <span className="badge bg-light text-dark border align-self-start" style={{ fontSize: '0.85rem', padding: '6px 10px' }}>
+                            {orderResult.payment.status === 'captured' && orderResult.payment.method === 'upi' ? (
                               <><i className="fas fa-mobile-alt me-1"></i>UPI - {orderResult.payment.upiApp || 'UPI'}</>
-                            ) : orderResult.payment.method === 'cod' ? (
+                            ) : orderResult.payment.status !== 'captured' && orderResult.payment.method === 'cod' ? (
                               <><i className="fas fa-money-bill-wave me-1"></i>Cash on Delivery</>
-                            ) : orderResult.payment.method === 'wallet' ? (
+                            ) : orderResult.payment.status === 'captured' && orderResult.payment.method === 'wallet' ? (
                               <><i className="fas fa-wallet me-1"></i>{orderResult.payment.walletType || 'Wallet'}</>
+                            ) : orderResult.payment.status === 'captured' ? (
+                              <><i className="fas fa-credit-card me-1"></i>{orderResult.payment.cardBrand || 'Card'}{orderResult.payment.last4 ? ` •••• ${orderResult.payment.last4}` : ''}</>
                             ) : (
-                              <><i className="fas fa-credit-card me-1"></i>{orderResult.payment.cardBrand || 'Visa'} •••• {orderResult.payment.last4 || '4242'}</>
+                              <><i className="fas fa-wallet me-1"></i>{orderResult.payment.method.toUpperCase()}</>
                             )}
                           </span>
-                          {orderResult.payment.tokenized !== false && (
+                          <span className="small text-muted">
+                            Mode of payment: {orderResult.payment.method.toUpperCase()}
+                          </span>
+                          {orderResult.payment.status === 'captured' && orderResult.payment.tokenized !== false && (
                             <small className="text-muted">Tokenized payment</small>
                           )}
-                          {orderResult.payment.method === 'cod' && (
-                            <small className="text-success">Pay when order arrives</small>
-                          )}
                         </div>
+                        {(orderResult.order.cookingInstructions ||
+                          orderResult.order.items.find((item) => item.cookingInstructions)?.cookingInstructions) && (
+                          <div className="alert alert-light border mt-3 mb-0">
+                            <strong>Cooking instructions:</strong>
+                            <p className="mb-0 mt-1">
+                              {orderResult.order.cookingInstructions ||
+                                orderResult.order.items.find((item) => item.cookingInstructions)?.cookingInstructions}
+                            </p>
+                          </div>
+                        )}
                       </div>
                     </div>
 
@@ -2994,11 +2927,6 @@ export default function CartPilotClient() {
                           <input type="radio" className="btn-check" name="smartPayment" id="smart-cod" checked={selectedPaymentMethod === 'cod'} onChange={() => setSelectedPaymentMethod('cod')} />
                           <label className="btn btn-outline-primary" htmlFor="smart-cod"><i className="fas fa-money-bill-wave me-1"></i>COD</label>
                         </div>
-                        {selectedPaymentMethod === 'upi' && (
-                          <div className="mt-2">
-                            <input type="text" className="form-control form-control-sm" placeholder="Enter UPI ID (e.g., name@paytm)" value={upiId} onChange={(e) => setUpiId(e.target.value)} />
-                          </div>
-                        )}
                       </div>
 
                       <div className="d-flex gap-3">
@@ -3008,10 +2936,10 @@ export default function CartPilotClient() {
                         <button
                           className="btn btn-primary flex-grow-1"
                           onClick={handleSmartCartCheckout}
-                          disabled={smartCartResult.cart.length === 0 || (selectedPaymentMethod === 'upi' && !upiId)}
+                          disabled={smartCartResult.cart.length === 0}
                         >
                           <i className="fas fa-check-circle me-2"></i>
-                          {selectedPaymentMethod === 'upi' ? 'Pay via UPI' : selectedPaymentMethod === 'card' ? 'Pay with Card' : selectedPaymentMethod === 'wallet' ? 'Pay from Wallet' : 'Place Order (COD)'} • ${smartCartResult.summary.subtotal}
+                          Place Order • ${smartCartResult.summary.subtotal}
                         </button>
                       </div>
                     </div>
@@ -3127,11 +3055,6 @@ export default function CartPilotClient() {
                           <input type="radio" className="btn-check" name="budgetPayment" id="budget-cod" checked={selectedPaymentMethod === 'cod'} onChange={() => setSelectedPaymentMethod('cod')} />
                           <label className="btn btn-outline-success" htmlFor="budget-cod"><i className="fas fa-money-bill-wave me-1"></i>COD</label>
                         </div>
-                        {selectedPaymentMethod === 'upi' && (
-                          <div className="mt-2">
-                            <input type="text" className="form-control form-control-sm" placeholder="Enter UPI ID (e.g., name@paytm)" value={upiId} onChange={(e) => setUpiId(e.target.value)} />
-                          </div>
-                        )}
                       </div>
 
                       <div className="d-flex gap-3">
@@ -3141,10 +3064,10 @@ export default function CartPilotClient() {
                         <button
                           className="btn btn-success flex-grow-1"
                           onClick={handleBudgetShopCheckout}
-                          disabled={budgetShopResult.selectedProducts.length === 0 || (selectedPaymentMethod === 'upi' && !upiId)}
+                          disabled={budgetShopResult.selectedProducts.length === 0}
                         >
                           <i className="fas fa-check-circle me-2"></i>
-                          {selectedPaymentMethod === 'upi' ? 'Pay via UPI' : selectedPaymentMethod === 'card' ? 'Pay with Card' : selectedPaymentMethod === 'wallet' ? 'Pay from Wallet' : 'Place Order (COD)'} • ${budgetShopResult.budget.allocated}
+                          Place Order • ${budgetShopResult.budget.allocated}
                         </button>
                       </div>
                     </div>
@@ -3265,11 +3188,6 @@ export default function CartPilotClient() {
                             <input type="radio" className="btn-check" name="predictPayment" id="predict-cod" checked={selectedPaymentMethod === 'cod'} onChange={() => setSelectedPaymentMethod('cod')} />
                             <label className="btn btn-outline-warning" htmlFor="predict-cod"><i className="fas fa-money-bill-wave me-1"></i>COD</label>
                           </div>
-                          {selectedPaymentMethod === 'upi' && (
-                            <div className="mt-2">
-                              <input type="text" className="form-control form-control-sm" placeholder="Enter UPI ID (e.g., name@paytm)" value={upiId} onChange={(e) => setUpiId(e.target.value)} />
-                            </div>
-                          )}
                         </div>
                       )}
 
@@ -3289,10 +3207,9 @@ export default function CartPilotClient() {
                             <button
                               className="btn btn-warning w-100"
                               onClick={handlePredictionCheckout}
-                              disabled={selectedPaymentMethod === 'upi' && !upiId}
                             >
                               <i className="fas fa-bolt me-2"></i>
-                              {selectedPaymentMethod === 'upi' ? 'Pay via UPI' : selectedPaymentMethod === 'card' ? 'Pay with Card' : selectedPaymentMethod === 'wallet' ? 'Pay from Wallet' : 'Place Order (COD)'}
+                              Place Order
                             </button>
                           </div>
                         </div>

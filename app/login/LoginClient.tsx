@@ -3,6 +3,8 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
+import { backendUrl } from '../lib/backend';
+import { saveAuthenticatedToken } from '../lib/auth';
 
 export default function LoginClient() {
   const [email, setEmail] = useState('');
@@ -19,7 +21,7 @@ export default function LoginClient() {
     setError(null);
 
     try {
-      const response = await fetch('http://localhost:8000/auth/login/json', {
+      const response = await fetch(`${backendUrl}/auth/login/json`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
@@ -32,12 +34,22 @@ export default function LoginClient() {
 
       if (response.ok) {
         const data = await response.json();
-        localStorage.setItem('token', data.access_token);
+        const profileResponse = await fetch(`${backendUrl}/auth/me`, {
+          headers: { Authorization: `Bearer ${data.access_token}` },
+        });
+        if (!profileResponse.ok) {
+          throw new Error('Could not load your account profile.');
+        }
+        const profile: { role: 'customer' | 'merchant'; merchant_id: string | null } = await profileResponse.json();
+        if (profile.role !== 'customer') {
+          setError('Customer sign-in only. This is a merchant account; use the merchant portal below.');
+          return;
+        }
+        saveAuthenticatedToken('customer', data.access_token);
 
         // Notify other components that auth state changed
         window.dispatchEvent(new Event('authChanged'));
 
-        // Redirect to shop page after successful login
         router.push('/shop');
       } else {
         const errorData = await response.json();
@@ -53,8 +65,8 @@ export default function LoginClient() {
 
   return (
     <div className="login-area">
-      <h2 className="text-secondary text-center">Login</h2>
-      <p className="text-center m-b25">welcome please login to your account</p>
+      <h2 className="text-secondary text-center">Customer Login</h2>
+      <p className="text-center m-b25">Sign in to your customer account to shop and manage orders.</p>
 
       {error && (
         <div className="alert alert-danger" role="alert">
@@ -126,6 +138,9 @@ export default function LoginClient() {
           </Link>
         </div>
       </form>
+      <p className="text-center mt-4 mb-0">
+        Run a restaurant? <Link href="/merchant/login" className="text-primary">Merchant sign in</Link>
+      </p>
     </div>
   );
 }

@@ -5,6 +5,8 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import Header from '../../components/Header';
 import AccountSidebar from '../../components/AccountSidebar';
+import { optionalBackendUrl } from '../../lib/backend';
+import { getAuthenticatedSession } from '../../lib/auth';
 
 export default function ProfilePage() {
   const router = useRouter();
@@ -23,18 +25,19 @@ export default function ProfilePage() {
   });
 
   useEffect(() => {
-    const token = localStorage.getItem('token');
-    if (!token) {
-      router.push('/login');
-      return;
-    }
-
-    fetchUserInfo();
+    const verifyAndLoad = async () => {
+      if (!(await getAuthenticatedSession('customer'))) {
+        router.replace('/login');
+        return;
+      }
+      fetchUserInfo();
+    };
+    void verifyAndLoad();
   }, [router]);
 
   const fetchUserInfo = async () => {
     try {
-      const backend = process.env.NEXT_PUBLIC_BACKEND_URL;
+      const backend = optionalBackendUrl;
       if (!backend) {
         // Demo mode - use mock data
         setFormData(prev => ({
@@ -47,11 +50,11 @@ export default function ProfilePage() {
         return;
       }
 
-      const token = localStorage.getItem('token');
-      if (!token) return;
+      const session = await getAuthenticatedSession('customer');
+      if (!session) return;
 
       const response = await fetch(`${backend}/auth/me`, {
-        headers: { Authorization: `Bearer ${token}` },
+        headers: { Authorization: `Bearer ${session.token}` },
       });
 
       if (response.ok) {
@@ -87,7 +90,7 @@ export default function ProfilePage() {
     setMessage('');
 
     try {
-      const backend = process.env.NEXT_PUBLIC_BACKEND_URL;
+      const backend = optionalBackendUrl;
       if (!backend) {
         // Demo mode - just show success message
         setMessage('Profile updated successfully!');
@@ -95,8 +98,8 @@ export default function ProfilePage() {
         return;
       }
 
-      const token = localStorage.getItem('token');
-      if (!token) return;
+      const session = await getAuthenticatedSession('customer');
+      if (!session) return;
 
       const updateData: any = {
         name: formData.name,
@@ -117,7 +120,7 @@ export default function ProfilePage() {
       const response = await fetch(`${backend}/auth/update-profile`, {
         method: 'PUT',
         headers: {
-          'Authorization': `Bearer ${token}`,
+          'Authorization': `Bearer ${session.token}`,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify(updateData),

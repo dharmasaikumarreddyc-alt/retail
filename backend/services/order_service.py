@@ -5,11 +5,79 @@ from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
 
-from database.models import OrderDB, TransactionDB, VirtualCardDB
+from database.models import (
+    MerchantDB,
+    MerchantOrderDB,
+    MerchantReviewDB,
+    OrderDB,
+    TransactionDB,
+    VirtualCardDB,
+)
 
 
 class OrderService:
     """Service for order and transaction management."""
+
+    @staticmethod
+    async def _serialize_order(db: AsyncSession, order: OrderDB) -> Dict[str, Any]:
+        items = order.items or []
+        steps = order.steps or []
+        merchant_order = await db.get(MerchantOrderDB, order.id)
+        merchant = await db.get(MerchantDB, merchant_order.merchant_id) if merchant_order else None
+        review = await db.scalar(
+            select(MerchantReviewDB).where(MerchantReviewDB.order_id == order.id)
+        )
+        payment_method, _, payment_status = (order.card or "unknown:unknown").partition(":")
+        subtotal = sum(
+            float(item.get("price", 0)) * int(item.get("quantity", item.get("qty", 0)))
+            for item in items
+        )
+        pricing = next(
+            (
+                step.get("pricing")
+                for step in steps
+                if isinstance(step, dict) and step.get("pricing")
+            ),
+            {
+                "subtotal": subtotal,
+                "serviceFee": 0,
+                "deliveryFee": 0,
+                "tax": 0,
+                "loyaltyDiscount": 0,
+                "total": order.total,
+            },
+        )
+        return {
+            "id": order.id,
+            "merchant": order.merchant,
+            "merchantId": merchant.id if merchant else None,
+            "merchantName": order.merchant,
+            "merchantAddress": merchant.address if merchant else "",
+            "items": items,
+            "total": order.total,
+            "pricing": pricing,
+            "savings": order.savings,
+            "date": order.date,
+            "createdAt": order.created_at.isoformat(),
+            "status": order.status,
+            "agentTask": order.agent_task,
+            "card": order.card,
+            "payment": {
+                "method": payment_method,
+                "status": payment_status or "unknown",
+            },
+            "review": (
+                {
+                    "rating": review.rating,
+                    "review": review.review,
+                    "createdAt": review.created_at.isoformat(),
+                }
+                if review
+                else None
+            ),
+            "address": order.address,
+            "steps": steps,
+        }
 
     @staticmethod
     async def get_orders(
@@ -26,22 +94,7 @@ class OrderService:
         )
         orders = result.scalars().all()
 
-        return [
-            {
-                "id": order.id,
-                "merchant": order.merchant,
-                "items": order.items,
-                "total": order.total,
-                "savings": order.savings,
-                "date": order.date,
-                "status": order.status,
-                "agentTask": order.agent_task,
-                "card": order.card,
-                "address": order.address,
-                "steps": order.steps
-            }
-            for order in orders
-        ]
+        return [await OrderService._serialize_order(db, order) for order in orders]
 
     @staticmethod
     async def get_order(
@@ -59,19 +112,7 @@ class OrderService:
         if not order:
             return None
 
-        return {
-            "id": order.id,
-            "merchant": order.merchant,
-            "items": order.items,
-            "total": order.total,
-            "savings": order.savings,
-            "date": order.date,
-            "status": order.status,
-            "agentTask": order.agent_task,
-            "card": order.card,
-            "address": order.address,
-            "steps": order.steps
-        }
+        return await OrderService._serialize_order(db, order)
 
     @staticmethod
     async def get_stats(

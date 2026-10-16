@@ -15,17 +15,14 @@ agent_service = AgentService()
 
 @router.post("/task", response_model=dict)
 async def create_task(
-    task_data: AgentTask,
-    current_user = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
+    _task_data: AgentTask,
+    _current_user = Depends(get_current_user),
 ):
     """Create and execute a new agent task."""
-    result = await agent_service.create_task(
-        db=db,
-        user_id=current_user.id,
-        task=task_data.task
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail="Agent checkout is disabled until a real payment provider and authenticated order processing are configured.",
     )
-    return result
 
 
 @router.get("/tasks", response_model=List[AgentRunResponse])

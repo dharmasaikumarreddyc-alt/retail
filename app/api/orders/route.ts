@@ -1,13 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { addOrder, getOrders, type Order } from './store';
 
-// GET /api/orders - Get all orders (newest first)
+const productionUnavailable = () =>
+  NextResponse.json(
+    { success: false, error: 'Order history is disabled until authenticated persistent order storage is configured.' },
+    { status: 503 },
+  );
+
 export async function GET() {
+  if (process.env.NODE_ENV === 'production') return productionUnavailable();
   return NextResponse.json({ success: true, orders: getOrders() });
 }
 
-// POST /api/orders - Create a new order
 export async function POST(request: NextRequest) {
+  if (process.env.NODE_ENV === 'production') return productionUnavailable();
   try {
     const order: Order = await request.json();
     addOrder(order);

@@ -3,6 +3,8 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import { backendUrl } from '../lib/backend';
+import { clearAuthenticatedToken, getAuthenticatedSession } from '../lib/auth';
 
 interface Product {
   id: string | number;
@@ -53,15 +55,15 @@ export default function ProductModal({ product, onClose }: ProductModalProps) {
     if (!product) return;
 
     try {
-      const token = localStorage.getItem('token');
-      if (!token) {
+      const session = await getAuthenticatedSession('customer');
+      if (!session) {
         setIsInCart(false);
         return;
       }
 
-      const response = await fetch('http://localhost:8000/cart', {
+      const response = await fetch(`${backendUrl}/cart`, {
         headers: {
-          'Authorization': `Bearer ${token}`
+          'Authorization': `Bearer ${session.token}`
         }
       });
 
@@ -84,8 +86,8 @@ export default function ProductModal({ product, onClose }: ProductModalProps) {
   const handleAddToCart = async () => {
     if (!product) return;
 
-    const token = localStorage.getItem('token');
-    if (!token) {
+    const session = await getAuthenticatedSession('customer');
+    if (!session) {
       // Redirect to login if not authenticated
       router.push('/login');
       return;
@@ -104,11 +106,11 @@ export default function ProductModal({ product, onClose }: ProductModalProps) {
         productId = parts[1];
       }
 
-      const response = await fetch('http://localhost:8000/cart/add', {
+      const response = await fetch(`${backendUrl}/cart/add`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
+          'Authorization': `Bearer ${session.token}`
         },
         body: JSON.stringify({
           merchant_id: merchantId,
@@ -123,7 +125,7 @@ export default function ProductModal({ product, onClose }: ProductModalProps) {
         window.dispatchEvent(new Event('cartUpdated'));
       } else if (response.status === 401) {
         // Token expired, redirect to login
-        localStorage.removeItem('token');
+        clearAuthenticatedToken('customer');
         router.push('/login');
       } else {
         console.error('Failed to add to cart');

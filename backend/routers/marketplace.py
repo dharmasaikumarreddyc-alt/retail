@@ -1,15 +1,11 @@
 """Marketplace API - Merchant discovery, ordering, and checkout."""
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 from agents.base import (
     discover_merchants,
     get_merchant_catalog,
-    generate_payment_token,
-    process_payment,
-    create_order,
-    get_customer_data,
     MERCHANTS,
 )
 
@@ -77,72 +73,18 @@ async def get_merchant(merchant_id: str, filter_tags: Optional[str] = None):
 
 @router.post("/order")
 async def place_order(request: OrderRequest):
-    """
-    Place an order with tokenized payment.
-
-    Flow:
-    1. Generate payment token
-    2. Process payment
-    3. Create order
-    4. Notify merchant
-    5. Calculate loyalty points
-    6. Return confirmation
-    """
-    # Validate merchant
-    if request.merchant_id not in MERCHANTS:
-        raise HTTPException(status_code=404, detail="Merchant not found")
-
-    merchant = MERCHANTS[request.merchant_id]
-
-    # Calculate total
-    total = sum(item.price * item.qty for item in request.items)
-
-    # Generate payment token
-    token = generate_payment_token(total, request.merchant_id)
-
-    # Process payment
-    payment_result = process_payment(token, total, request.merchant_id)
-
-    if not payment_result["success"]:
-        raise HTTPException(status_code=400, detail=payment_result.get("error", "Payment failed"))
-
-    # Create order
-    items_dict = [{"id": i.id, "name": i.name, "price": i.price, "qty": i.qty} for i in request.items]
-    order = create_order(
-        merchant_id=request.merchant_id,
-        items=items_dict,
-        customer_id=request.customer_id,
-        payment_result=payment_result,
-        order_type=request.order_type,
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail="Checkout is disabled until a real payment provider and persistent order storage are configured.",
     )
-
-    # Transform to frontend format
-    return {
-        "order_id": order["order_id"],
-        "merchant_id": request.merchant_id,
-        "merchant_name": order["merchant"]["name"],
-        "items": order["items"],
-        "subtotal": order["subtotal"],
-        "total": order["total"],
-        "status": order["status"],
-        "payment": {
-            "card_last4": payment_result.get("card_last4", "0000"),
-            "token_status": "destroyed"
-        },
-        "loyalty": {
-            "points_earned": order["loyalty"]["points_earned"],
-            "total_points": order["loyalty"]["total_points"]
-        },
-        "estimated_ready": order["timing"]["estimated_ready"],
-        "created_at": order["created_at"]
-    }
 
 
 @router.get("/customer/{customer_id}")
 async def get_customer_profile(customer_id: str):
-    """Get customer profile with loyalty points and order history."""
-    data = get_customer_data(customer_id)
-    return data
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail="Customer profiles are unavailable until backed by authenticated persistent storage.",
+    )
 
 
 @router.get("/categories")

@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import { getAuthenticatedSession } from '../lib/auth';
 
 interface AccountSidebarProps {
   userName?: string;
@@ -15,29 +16,23 @@ export default function AccountSidebar({ userName, userEmail }: AccountSidebarPr
   const [displayEmail, setDisplayEmail] = useState(userEmail || 'user@example.com');
 
   useEffect(() => {
-    // Only talk to the Python backend if it's configured. In the demo it isn't
-    // running, so we skip the call entirely (avoids a "Failed to fetch" error).
-    const backend = process.env.NEXT_PUBLIC_BACKEND_URL;
-    if (!backend || userName) return;
+    let cancelled = false;
 
-    const fetchUserInfo = async () => {
-      try {
-        const token = localStorage.getItem('token');
-        if (!token) return;
-        const response = await fetch(`${backend}/auth/me`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        if (response.ok) {
-          const data = await response.json();
-          setDisplayName(data.name || data.email || 'User');
-          setDisplayEmail(data.email || 'user@example.com');
-        }
-      } catch {
-        /* non-critical */
-      }
+    const loadProfile = async () => {
+      const session = await getAuthenticatedSession('customer');
+      if (!session || cancelled) return;
+
+      const email = userEmail || session.profile.email;
+      const name = userName?.trim() || session.profile.name?.trim() || email.split('@')[0] || 'User';
+      setDisplayName(name);
+      setDisplayEmail(email);
     };
-    fetchUserInfo();
-  }, [userName]);
+
+    void loadProfile();
+    return () => {
+      cancelled = true;
+    };
+  }, [userName, userEmail]);
 
   const isActive = (path: string) => pathname === path;
 

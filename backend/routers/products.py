@@ -65,14 +65,18 @@ async def get_products(
                 if category.lower() not in product_categories:
                     continue
 
-            if search:
-                search_lower = search.lower()
-                searchable_text = f"{transformed['name']} {transformed['description']} {' '.join(transformed['tags'])}".lower()
-                if search_lower not in searchable_text:
+            if search and search.strip():
+                search_terms = search.lower().split()
+                searchable_text = (
+                    f"{transformed['name']} {transformed['description']} {transformed['merchant']} "
+                    f"{' '.join(transformed['category'])} {' '.join(transformed['tags'])}"
+                ).lower()
+                if not all(term in searchable_text for term in search_terms):
                     continue
 
             products.append(transformed)
 
+    total = len(products)
     # Apply limit
     if limit:
         products = products[:limit]
@@ -80,7 +84,7 @@ async def get_products(
     return {
         "success": True,
         "products": products,
-        "total": len(products)
+        "total": total
     }
 
 
