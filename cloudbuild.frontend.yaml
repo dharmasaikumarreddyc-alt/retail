@@ -1,0 +1,18 @@
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - --build-arg
+      - NEXT_PUBLIC_BACKEND_URL=${_BACKEND_URL}
+      - -t
+      - ${_IMAGE}
+      - .
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - ${_IMAGE}
+images:
+  - ${_IMAGE}
+substitutions:
+  _BACKEND_URL: http://localhost:8000
+  _IMAGE: us-central1-docker.pkg.dev/$PROJECT_ID/retail/aisle-web:latest
