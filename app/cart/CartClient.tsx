@@ -3,6 +3,8 @@
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import { backendUrl } from '../lib/backend';
+import { clearAuthenticatedToken, getAuthenticatedSession } from '../lib/auth';
 
 interface CartItem {
   merchant_id: string;
@@ -84,15 +86,15 @@ export default function CartClient() {
 
   const fetchCart = async () => {
     try {
-      const token = localStorage.getItem('token');
-      if (!token) {
+      const session = await getAuthenticatedSession('customer');
+      if (!session) {
         router.push('/login');
         return;
       }
 
-      const response = await fetch('http://localhost:8000/cart', {
+      const response = await fetch(`${backendUrl}/cart`, {
         headers: {
-          'Authorization': `Bearer ${token}`
+          'Authorization': `Bearer ${session.token}`
         }
       });
 
@@ -100,7 +102,7 @@ export default function CartClient() {
         const data = await response.json();
         setCart(data);
       } else if (response.status === 401) {
-        localStorage.removeItem('token');
+        clearAuthenticatedToken('customer');
         router.push('/login');
       } else {
         setError('Failed to load cart');
@@ -118,14 +120,14 @@ export default function CartClient() {
     setUpdating(itemKey);
 
     try {
-      const token = localStorage.getItem('token');
-      if (!token) return;
+      const session = await getAuthenticatedSession('customer');
+      if (!session) return;
 
-      const response = await fetch('http://localhost:8000/cart/update', {
+      const response = await fetch(`${backendUrl}/cart/update`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
+          'Authorization': `Bearer ${session.token}`
         },
         body: JSON.stringify({
           merchant_id: merchantId,
@@ -151,15 +153,15 @@ export default function CartClient() {
     setUpdating(itemKey);
 
     try {
-      const token = localStorage.getItem('token');
-      if (!token) return;
+      const session = await getAuthenticatedSession('customer');
+      if (!session) return;
 
       const response = await fetch(
-        `http://localhost:8000/cart/remove?merchant_id=${merchantId}&product_id=${productId}`,
+        `${backendUrl}/cart/remove?merchant_id=${merchantId}&product_id=${productId}`,
         {
           method: 'DELETE',
           headers: {
-            'Authorization': `Bearer ${token}`
+            'Authorization': `Bearer ${session.token}`
           }
         }
       );

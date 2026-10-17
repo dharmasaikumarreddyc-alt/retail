@@ -1,5 +1,5 @@
 from pydantic import BaseModel, EmailStr
-from typing import Optional
+from typing import Optional, Literal
 from datetime import datetime
 
 class UserBase(BaseModel):
@@ -29,6 +29,8 @@ class UserResponse(BaseModel):
     email: str
     name: str
     agent_paused: bool
+    role: Literal["customer", "merchant"] = "customer"
+    merchant_id: Optional[str] = None
 
 class Token(BaseModel):
     access_token: str

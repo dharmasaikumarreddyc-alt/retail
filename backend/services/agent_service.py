@@ -13,7 +13,13 @@ class AgentService:
     """Service for agent task management and orchestration."""
 
     def __init__(self):
-        self.orchestrator = AgentOrchestrator()
+        self._orchestrator: Optional[AgentOrchestrator] = None
+
+    @property
+    def orchestrator(self) -> AgentOrchestrator:
+        if self._orchestrator is None:
+            self._orchestrator = AgentOrchestrator()
+        return self._orchestrator
 
     async def create_task(
         self,

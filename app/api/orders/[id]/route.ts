@@ -5,6 +5,12 @@ export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  if (process.env.NODE_ENV === 'production') {
+    return NextResponse.json(
+      { success: false, error: 'Order history is disabled until authenticated persistent order storage is configured.' },
+      { status: 503 },
+    );
+  }
   const { id } = await params;
   const order = getOrder(id);
 
@@ -20,6 +26,12 @@ export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  if (process.env.NODE_ENV === 'production') {
+    return NextResponse.json(
+      { success: false, error: 'Order updates are disabled until authenticated persistent order storage is configured.' },
+      { status: 503 },
+    );
+  }
   const { id } = await params;
   const body = await request.json();
   const status = body?.status as OrderStatus;

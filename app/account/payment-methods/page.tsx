@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import Header from '../../components/Header';
 import AccountSidebar from '../../components/AccountSidebar';
+import { getAuthenticatedSession } from '../../lib/auth';
 
 type PaymentMethodType = 'card' | 'upi' | 'wallet';
 
@@ -31,13 +32,14 @@ export default function PaymentMethodsPage() {
   });
 
   useEffect(() => {
-    const token = localStorage.getItem('token');
-    if (!token) {
-      router.push('/login');
-      return;
-    }
-
-    fetchPaymentMethods();
+    const verifyAndLoad = async () => {
+      if (!(await getAuthenticatedSession('customer'))) {
+        router.replace('/login');
+        return;
+      }
+      fetchPaymentMethods();
+    };
+    void verifyAndLoad();
   }, [router]);
 
   const fetchPaymentMethods = () => {

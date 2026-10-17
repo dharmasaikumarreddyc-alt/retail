@@ -1,10 +1,12 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import Header from '../../components/Header';
 import AccountSidebar from '../../components/AccountSidebar';
+import { getAuthenticatedSession } from '../../lib/auth';
+import { backendUrl } from '../../lib/backend';
 
 interface Order {
   id: string;
@@ -28,34 +30,80 @@ interface Order {
   createdAt: string;
 }
 
+interface BackendOrder {
+  id: string;
+  merchantName: string;
+  items: Array<{
+    productId?: string;
+    product_id?: string;
+    name: string;
+    price: number;
+    quantity?: number;
+    qty?: number;
+    image?: string;
+  }>;
+  pricing?: Order['pricing'];
+  total: number;
+  status: string;
+  createdAt: string;
+}
+
 export default function OrdersPage() {
   const router = useRouter();
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    const token = localStorage.getItem('token');
-    if (!token) {
-      router.push('/login');
-      return;
-    }
-
-    fetchOrders();
-  }, [router]);
-
-  const fetchOrders = async () => {
+  const fetchOrders = useCallback(async () => {
     try {
-      const response = await fetch('/api/orders');
-      if (response.ok) {
-        const data = await response.json();
-        setOrders(data.orders || []);
+      const session = await getAuthenticatedSession('customer');
+      if (!session) {
+        router.replace('/login');
+        return;
       }
+      const response = await fetch(`${backendUrl}/orders`, {
+        cache: 'no-store',
+        headers: { Authorization: `Bearer ${session.token}` },
+      });
+      if (!response.ok) throw new Error('Could not load your order history.');
+      const data: BackendOrder[] = await response.json();
+      setOrders(data.map((order) => {
+        const items = order.items.map((item) => ({
+          productId: item.productId || item.product_id || item.name,
+          name: item.name,
+          price: item.price,
+          quantity: item.quantity ?? item.qty ?? 1,
+          image: item.image || '/images/shop/small/pic1.png',
+        }));
+        const subtotal = items.reduce((sum, item) => sum + item.price * item.quantity, 0);
+        return {
+          id: order.id,
+          merchantName: order.merchantName,
+          items,
+          pricing: order.pricing || {
+            subtotal,
+            serviceFee: 0,
+            deliveryFee: 0,
+            tax: 0,
+            loyaltyDiscount: 0,
+            total: order.total,
+          },
+          status: order.status,
+          createdAt: order.createdAt,
+        };
+      }));
     } catch (error) {
       console.error('Error fetching orders:', error);
     } finally {
       setLoading(false);
     }
-  };
+  }, [router]);
+
+  useEffect(() => {
+    const loadOrders = async () => {
+      await fetchOrders();
+    };
+    void loadOrders();
+  }, [fetchOrders]);
 
   const formatDate = (dateString: string) => {
     const date = new Date(dateString);
@@ -130,7 +178,7 @@ export default function OrdersPage() {
                       </svg>
                     </div>
                     <h5 className="mb-3">No orders yet</h5>
-                    <p className="text-muted mb-4">You haven't placed any orders yet. Start shopping with Cart Pilot!</p>
+                    <p className="text-muted mb-4">You haven&apos;t placed any orders yet. Start shopping with Cart Pilot!</p>
                     <Link href="/cart-pilot" className="btn btn-secondary">
                       <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" className="me-2">
                         <path d="M12 0L14.59 8.41L23 11L14.59 13.59L12 22L9.41 13.59L1 11L9.41 8.41L12 0Z"/>

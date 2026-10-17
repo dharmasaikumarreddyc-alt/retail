@@ -4,12 +4,10 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
 from typing import List
-from datetime import datetime
-import random
 
 from database import get_db
 from database.models import VirtualCardDB, TransactionDB
-from models.card import CardCreate, CardResponse, TransactionResponse
+from models.card import CardCreate
 from routers.auth import get_current_user
 
 router = APIRouter(prefix="/wallet", tags=["Wallet"])
@@ -45,36 +43,14 @@ async def get_cards(
 
 @router.post("/cards", response_model=dict)
 async def create_card(
-    card_data: CardCreate,
-    current_user = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
+    _card_data: CardCreate,
+    _current_user = Depends(get_current_user),
 ):
     """Create a new virtual card."""
-    last4 = str(random.randint(1000, 9999))
-
-    card = VirtualCardDB(
-        user_id=current_user.id,
-        label=card_data.label,
-        last4=last4,
-        type=card_data.type.value,
-        limit=card_data.limit,
-        merchant=card_data.merchant,
-        status="active"
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail="Virtual card creation is disabled until integrated with a regulated card/payment provider.",
     )
-    db.add(card)
-    await db.commit()
-    await db.refresh(card)
-
-    return {
-        "id": card.id,
-        "label": card.label,
-        "last4": card.last4,
-        "type": card.type,
-        "limit": card.limit,
-        "spent": card.spent,
-        "status": card.status,
-        "merchant": card.merchant
-    }
 
 
 @router.put("/cards/{card_id}/pause")

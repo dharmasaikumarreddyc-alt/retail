@@ -32,15 +32,20 @@ yarn-error.log*
 __pycache__/
 *.py[cod]
 *$py.class
+venv/
+.venv/
 *.db
 *.sqlite
 *.sqlite3
+backend/aisle.db.pre-postgres-migration-*.bak
 
 # env files (exclude all secrets and environment configurations)
 .env*
 *.env
 **/.env*
 backend/.env
+!.env.example
+!**/.env.example
 
 # Claude-related files
 .claude/

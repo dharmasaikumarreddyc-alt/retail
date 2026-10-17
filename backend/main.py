@@ -18,14 +18,15 @@ from routers import (
     products_router
 )
 from routers.marketplace import router as marketplace_router
+from routers.merchant_dashboard import router as merchant_dashboard_router
+from routers.payments import router as payments_router
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan handler."""
-    # Startup
-    await init_db()
-    print("✓ Database initialized")
+    if settings.ENVIRONMENT != "production":
+        await init_db()
     yield
     # Shutdown
     print("Shutting down...")
@@ -56,6 +57,8 @@ app.include_router(wallet_router)
 app.include_router(rules_router)
 app.include_router(dashboard_router)
 app.include_router(marketplace_router)
+app.include_router(merchant_dashboard_router)
+app.include_router(payments_router)
 app.include_router(cart_router)
 app.include_router(products_router)
 

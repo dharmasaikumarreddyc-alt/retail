@@ -38,12 +38,14 @@ pip install -r requirements.txt
 
 ### Configuration
 
-Create a `.env` file:
+Copy `.env.example` to `.env` for local development and set a replacement AI
+provider key if you use agent features. Do not reuse provider keys that were
+shared in chat; revoke those keys. Do not commit `.env`.
 
-```env
-GROQ_API_KEY=your_groq_api_key
-DEBUG=true
-```
+The backend uses Azure OpenAI when fully configured, then Groq when
+`GROQ_API_KEY` is set, then Google AI Studio when `GOOGLE_API_KEY` is set.
+Login and other non-AI APIs can start without an AI key; agent requests require
+one.
 
 ### Running
 
@@ -56,6 +58,94 @@ The API will be available at:
 - Docs: http://localhost:8000/docs
 - ReDoc: http://localhost:8000/redoc
 
+## Production deployment
+
+Deploy the Next.js frontend and FastAPI backend as separate services. Configure
+these variables in the backend host's secret/environment settings:
+
+- `ENVIRONMENT=production`
+- `DEBUG=false`
+- `SECRET_KEY`: a unique random value of at least 32 characters
+- `DATABASE_URL`: the Neon PostgreSQL connection string (the backend adapts
+  `postgresql://` URLs for its async driver)
+- `CORS_ORIGINS`: a JSON array containing only the deployed HTTPS frontend
+  origin, for example `["https://shop.example.com"]`
+- One AI provider key if agent endpoints will be used
+
+Set `NEXT_PUBLIC_BACKEND_URL` in the frontend deployment to the public HTTPS
+backend origin. This is a browser-visible URL, not a secret. The frontend now
+uses it consistently for backend calls.
+
+For production, run migrations as the backend service's release/pre-deploy
+command:
+
+```powershell
+python -m alembic upgrade head
+```
+
+The production app does not create or alter tables at startup. Back up the
+SQLite database before migration. To copy existing SQLite rows to an **empty**
+Neon database, configure the Neon `DATABASE_URL`, run the migration above, then
+run this once from `backend`:
+
+```powershell
+python migrate_sqlite_to_postgres.py --source .\aisle.db
+```
+
+The migration refuses to write into non-empty application tables, checks row
+counts, and leaves the SQLite source unchanged. Keep the SQLite file as a
+backup until the Neon data has been verified.
+
+### Merchant analytics demo
+
+The merchant dashboard is tied to the authenticated account, not a public
+merchant selector. To create the Starbucks demo merchant and its login, set
+`DEMO_MERCHANT_EMAIL` to a dedicated, unused merchant email and
+`DEMO_MERCHANT_PASSWORD` to a private password of 12-72 UTF-8 bytes in the
+backend environment. Then run:
+
+```powershell
+python -m alembic upgrade head
+python seed_merchant_demo.py
+```
+
+This creates one merchant account with 780 clearly marked synthetic orders
+covering the previous year and 260 synthetic reviews. Demo sales/reviews are
+stored separately from customer order history. The seed is idempotent and
+refuses to overwrite a non-demo merchant or partially seeded dataset. To load
+the analytics without creating a merchant login yet, use
+`python seed_merchant_demo.py --data-only`; rerun without that flag after
+setting the dedicated login values to attach the account without duplicating
+the sample data. Never use a customer's login as the merchant account.
+
+Merchant sign-in is available at `/merchant/login`; customer sign-in remains
+at `/login`. A customer account cannot access merchant analytics. The merchant AI review coach and today's sales outlook use Gemini via
+`GOOGLE_API_KEY` and `GOOGLE_MODEL`. Review suggestions are grounded in
+low-rated reviews, order and cancellation metrics, and top-selling products.
+The outlook compares today's weekday and remaining hours with up to one year
+of historical orders in the merchant's local time zone, then asks Gemini to
+explain the strongest item trends and a practical preparation step. If Gemini
+is unavailable or quota-limited, both AI panels show a clearly labeled
+evidence-based fallback instead of failing. The dashboard's seeded historical
+analytics are synthetic presentation data and must not be presented as real
+customer activity.
+
+Run the backend with the host's assigned port and without reload mode, for
+example `uvicorn main:app --host 0.0.0.0 --port 8000` (configure the actual
+port variable in the hosting provider's start command).
+
+Checkout is prototype-only: every selected payment option places the order
+directly without opening a payment gateway or collecting payment details.
+Orders are recorded in customer history and merchant analytics with payment
+marked as not collected. Non-onboarded merchants cannot accept checkout orders.
+
+Before inviting real users, configure host-level/API rate limiting for
+authentication and AI endpoints, move browser authentication tokens from
+`localStorage` to a secure `HttpOnly`, `Secure`, `SameSite` cookie flow, and
+rotate any provider keys that were previously exposed. Store replacement keys
+only in private local environment files or the hosting provider's secret
+manager; never commit them.
+
 ## API Endpoints
 
 ### Authentication
@@ -65,8 +155,14 @@ The API will be available at:
 - `GET /auth/me` - Get current user
 - `PUT /auth/me` - Update profile
 
+### Customer checkout
+- `POST /payments/checkout` - Create a server-priced prototype order without collecting payment details; accepts optional `cookingInstructions`
+- `POST /payments/reviews` - Submit one 1–5 star review for an order owned by the signed-in customer
+- Cooking instructions are saved with the customer and merchant order records and shown in the merchant's recent-orders view.
+- Customer reviews are linked to the order's merchant and appear in the merchant dashboard's customer reviews list.
+
 ### Agent
-- `POST /agent/task` - Create new shopping task
+- `POST /agent/task` - Disabled (`503`) until real checkout is implemented
 - `GET /agent/tasks` - List tasks
 - `GET /agent/tasks/{id}` - Get task details
 - `GET /agent/feed` - Get activity feed
@@ -74,14 +170,14 @@ The API will be available at:
 - `PUT /agent/resume` - Resume agent
 
 ### Orders
-- `GET /orders` - List orders
-- `GET /orders/{id}` - Get order details
+- `GET /orders` - List the signed-in customer's persisted orders
+- `GET /orders/{id}` - Get order details, saved cooking instructions, and any submitted review
 - `GET /orders/stats` - Get statistics
 
 ### Approvals
 - `GET /approvals` - List pending approvals
 - `GET /approvals/count` - Get pending count
-- `POST /approvals/{id}/approve` - Approve purchase
+- `POST /approvals/{id}/approve` - Disabled (`503`) until real checkout is implemented
 - `POST /approvals/{id}/decline` - Decline purchase
 
 ### Wallet

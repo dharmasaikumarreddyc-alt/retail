@@ -1,10 +1,4 @@
-// Data layer with both local food merchants AND DummyJSON product catalog.
-// The DummyJSON catalog is bundled locally (see ./dummyjson-products.json) so
-// the demo works fully offline and behind corporate TLS proxies.
-
-import dummyjsonData from './dummyjson-products.json';
-
-const DUMMYJSON_PRODUCTS: any[] = (dummyjsonData as any)?.products ?? [];
+// Data layer for the food and beverage catalog available in this app.
 
 export interface Merchant {
   id: string;
@@ -18,7 +12,6 @@ export interface Merchant {
   prepTime: string;
   address: string;
   isOpen: boolean;
-  dummyjsonCategories?: string[]; // Maps to DummyJSON API categories (optional)
   aiReason?: string;
 }
 
@@ -190,320 +183,50 @@ export const localProductsDB: Product[] = [
 ];
 
 // =====================================================
-// DUMMYJSON MERCHANTS (Electronics, Fashion, etc.)
-// =====================================================
-export const dummyjsonMerchantsDB: Merchant[] = [
-  {
-    id: 'tech-world',
-    name: 'Tech World',
-    type: 'Electronics Store',
-    category: ['electronics', 'tech', 'gadgets', 'smartphones', 'laptops', 'phone', 'iphone'],
-    dummyjsonCategories: ['smartphones', 'laptops', 'tablets', 'mobile-accessories'],
-    distance: '1.5 mi',
-    rating: 4.7,
-    image: 'https://dummyjson.com/image/400x200/282828/ffffff?text=Tech+World',
-    offers: ['10% off on smartphones', 'Free screen protector with laptops'],
-    prepTime: '15-20 min',
-    address: 'Lenox Square Mall, Atlanta, GA 30326',
-    isOpen: true,
-  },
-  {
-    id: 'glamour-beauty',
-    name: 'Glamour Beauty',
-    type: 'Beauty & Skincare',
-    category: ['beauty', 'skincare', 'cosmetics', 'fragrances', 'perfume', 'makeup'],
-    dummyjsonCategories: ['beauty', 'skin-care', 'fragrances'],
-    distance: '1.2 mi',
-    rating: 4.8,
-    image: 'https://dummyjson.com/image/400x200/E91E63/ffffff?text=Glamour+Beauty',
-    offers: ['20% off on skincare', 'Free samples with every order'],
-    prepTime: '10-15 min',
-    address: 'Phipps Plaza, Atlanta, GA 30326',
-    isOpen: true,
-  },
-  {
-    id: 'home-essentials',
-    name: 'Home Essentials',
-    type: 'Home & Kitchen',
-    category: ['home', 'kitchen', 'furniture', 'decor', 'appliances'],
-    dummyjsonCategories: ['furniture', 'home-decoration', 'kitchen-accessories'],
-    distance: '1.8 mi',
-    rating: 4.4,
-    image: 'https://dummyjson.com/image/400x200/795548/ffffff?text=Home+Essentials',
-    offers: ['Flat 25% off on furniture', 'Free delivery above $50'],
-    prepTime: '20-30 min',
-    address: 'Buckhead Village, Atlanta, GA 30326',
-    isOpen: true,
-  },
-  {
-    id: 'fashion-hub',
-    name: 'Fashion Hub',
-    type: 'Fashion & Apparel',
-    category: ['fashion', 'clothing', 'shirts', 'dresses', 'shoes', 'bags', 'dress', 'shirt'],
-    dummyjsonCategories: ['mens-shirts', 'womens-dresses', 'tops', 'mens-shoes', 'womens-shoes', 'womens-bags'],
-    distance: '2.0 mi',
-    rating: 4.6,
-    image: 'https://dummyjson.com/image/400x200/9C27B0/ffffff?text=Fashion+Hub',
-    offers: ['Buy 2 Get 1 Free', 'Extra 10% off for members'],
-    prepTime: '15-20 min',
-    address: 'Lenox Square Mall, Atlanta, GA 30326',
-    isOpen: true,
-  },
-  {
-    id: 'watch-world',
-    name: 'Watch World',
-    type: 'Watches & Accessories',
-    category: ['watches', 'accessories', 'sunglasses', 'jewellery', 'watch'],
-    dummyjsonCategories: ['mens-watches', 'womens-watches', 'sunglasses', 'womens-jewellery'],
-    distance: '1.5 mi',
-    rating: 4.9,
-    image: 'https://dummyjson.com/image/400x200/FF9800/ffffff?text=Watch+World',
-    offers: ['Luxury watches 30% off', 'Free gift wrapping'],
-    prepTime: '10-15 min',
-    address: 'Phipps Plaza, Atlanta, GA 30326',
-    isOpen: true,
-  },
-  {
-    id: 'sports-zone',
-    name: 'Sports Zone',
-    type: 'Sports & Fitness',
-    category: ['sports', 'fitness', 'accessories', 'outdoor', 'gym'],
-    dummyjsonCategories: ['sports-accessories'],
-    distance: '2.0 mi',
-    rating: 4.5,
-    image: 'https://dummyjson.com/image/400x200/2196F3/ffffff?text=Sports+Zone',
-    offers: ['20% off on fitness gear', 'Free delivery'],
-    prepTime: '15-20 min',
-    address: 'Buckhead Village, Atlanta, GA 30326',
-    isOpen: true,
-  },
-  {
-    id: 'auto-mart',
-    name: 'Auto Mart',
-    type: 'Vehicles & Accessories',
-    category: ['vehicles', 'motorcycle', 'automotive', 'bike'],
-    dummyjsonCategories: ['motorcycle', 'vehicle'],
-    distance: '3.0 mi',
-    rating: 4.3,
-    image: 'https://dummyjson.com/image/400x200/607D8B/ffffff?text=Auto+Mart',
-    offers: ['EMI options available', 'Free service for 1 year'],
-    prepTime: '30-45 min',
-    address: 'Midtown, Atlanta, GA 30309',
-    isOpen: true,
-  },
-];
+export const merchantsDB: Merchant[] = localMerchantsDB;
 
-// Combined merchants database
-export const merchantsDB: Merchant[] = [...localMerchantsDB, ...dummyjsonMerchantsDB];
-
-// =====================================================
-// DUMMYJSON API FUNCTIONS
-// =====================================================
-
-// Transform DummyJSON product to our format
-function transformDummyProduct(item: any, merchantId: string): Product {
-  return {
-    id: `${merchantId}-${item.id}`,
-    merchantId,
-    name: item.title,
-    price: Math.round(item.price * 100) / 100, // Keep USD price
-    originalPrice: Math.round((item.price / (1 - (item.discountPercentage || 0) / 100)) * 100) / 100,
-    discount: item.discountPercentage,
-    description: item.description,
-    image: item.thumbnail || item.images?.[0] || '',
-    category: item.category,
-    tags: [
-      item.category,
-      item.brand?.toLowerCase(),
-      ...(item.tags || []),
-    ].filter(Boolean),
-    inStock: item.stock > 0,
-    quantity: item.stock || 0,
-    rating: item.rating,
-  };
-}
-
-// Fetch products by category from the bundled DummyJSON snapshot.
-export async function fetchProductsByCategory(category: string): Promise<any[]> {
-  const cat = category.toLowerCase();
-  return DUMMYJSON_PRODUCTS.filter((p) => (p.category || '').toLowerCase() === cat);
-}
-
-// Search products in the bundled DummyJSON snapshot.
-// Mirrors the /products/search?q=... behavior: matches title, description,
-// brand, category and tags (case-insensitive).
-export async function searchDummyJsonAPI(query: string): Promise<any[]> {
-  const q = query.trim().toLowerCase();
-  if (!q) return [];
-  return DUMMYJSON_PRODUCTS.filter((p) => {
-    const haystack = [
-      p.title,
-      p.description,
-      p.brand,
-      p.category,
-      ...(Array.isArray(p.tags) ? p.tags : []),
-    ]
-      .filter(Boolean)
-      .join(' ')
-      .toLowerCase();
-    return haystack.includes(q);
-  });
-}
-
-// =====================================================
-// UNIFIED SEARCH FUNCTIONS
-// =====================================================
-
-// Search merchants - checks both local and DummyJSON products
+// Search merchants and products from the app's food catalog.
 export async function searchMerchants(query: string): Promise<Merchant[]> {
-  const q = query.toLowerCase();
-  const keywords = q.split(/\s+/).filter(word => word.length > 2);
+  const keywords = query.trim().toLowerCase().split(/\s+/).filter(word => word.length > 2);
+  if (keywords.length === 0) return [];
 
-  // Search DummyJSON to find matching categories
-  const dummyResults = await searchDummyJsonAPI(query);
-  const matchingDummyCategories = new Set(dummyResults.map((p: any) => p.category));
-
-  // Search local products
   const matchingLocalMerchants = new Set<string>();
   for (const product of localProductsDB) {
-    const matches = keywords.some(kw =>
-      product.name.toLowerCase().includes(kw) ||
-      product.tags.some(t => t.includes(kw)) ||
-      product.category.toLowerCase().includes(kw) ||
-      product.description.toLowerCase().includes(kw)
-    );
-    if (matches) {
+    const searchableText = `${product.name} ${product.description} ${product.category} ${product.tags.join(' ')}`.toLowerCase();
+    if (keywords.some(keyword => searchableText.includes(keyword))) {
       matchingLocalMerchants.add(product.merchantId);
     }
   }
 
-  // Find matching merchants
-  const results = merchantsDB.filter(merchant => {
-    // Check if local merchant has matching products
-    if (matchingLocalMerchants.has(merchant.id)) return true;
-
-    // Check if DummyJSON merchant has matching categories
-    if (merchant.dummyjsonCategories?.some(cat => matchingDummyCategories.has(cat))) return true;
-
-    // Keyword matching on merchant info
-    const keywordMatch = keywords.some(keyword =>
-      merchant.category.some(cat => cat.includes(keyword)) ||
+  return localMerchantsDB
+    .filter(merchant => matchingLocalMerchants.has(merchant.id) || keywords.some(keyword =>
+      merchant.category.some(category => category.includes(keyword)) ||
       merchant.type.toLowerCase().includes(keyword) ||
       merchant.name.toLowerCase().includes(keyword)
-    );
-
-    return keywordMatch && merchant.isOpen;
-  });
-
-  // Sort: merchants with actual matching products first
-  return results.sort((a, b) => {
-    const aHasProducts = matchingLocalMerchants.has(a.id) ||
-      a.dummyjsonCategories?.some(cat => matchingDummyCategories.has(cat));
-    const bHasProducts = matchingLocalMerchants.has(b.id) ||
-      b.dummyjsonCategories?.some(cat => matchingDummyCategories.has(cat));
-
-    if (aHasProducts && !bHasProducts) return -1;
-    if (!aHasProducts && bHasProducts) return 1;
-    return parseFloat(a.distance) - parseFloat(b.distance);
-  });
+    ))
+    .sort((left, right) => parseFloat(left.distance) - parseFloat(right.distance));
 }
 
-// Search products for a specific merchant
+// Search products for a specific merchant.
 export async function searchProducts(merchantId: string, query: string): Promise<Product[]> {
-  const merchant = merchantsDB.find(m => m.id === merchantId);
-  if (!merchant) return [];
+  if (!localMerchantsDB.some(merchant => merchant.id === merchantId)) return [];
+  const keywords = query.trim().toLowerCase().split(/\s+/).filter(word => word.length > 2);
+  const products = localProductsDB.filter(product => product.merchantId === merchantId && product.inStock);
+  if (keywords.length === 0) return products;
 
-  const q = query.toLowerCase();
-  const keywords = q.split(/\s+/).filter(word => word.length > 2);
-
-  // Check if it's a local merchant
-  const isLocalMerchant = localMerchantsDB.some(m => m.id === merchantId);
-
-  if (isLocalMerchant) {
-    // Search local products
-    const merchantProducts = localProductsDB.filter(p => p.merchantId === merchantId && p.inStock);
-
-    if (keywords.length > 0) {
-      const matching = merchantProducts.filter(product =>
-        keywords.some(keyword =>
-          product.tags.some(tag => tag.includes(keyword)) ||
-          product.name.toLowerCase().includes(keyword) ||
-          product.category.toLowerCase().includes(keyword) ||
-          product.description.toLowerCase().includes(keyword)
-        )
-      );
-      return matching;
-    }
-    return merchantProducts;
-  }
-
-  // DummyJSON merchant - search API
-  if (merchant.dummyjsonCategories) {
-    const searchResults = await searchDummyJsonAPI(query);
-
-    // Filter to only products in this merchant's categories
-    const merchantProducts = searchResults
-      .filter((item: any) => merchant.dummyjsonCategories!.includes(item.category))
-      .map((item: any) => transformDummyProduct(item, merchantId));
-
-    if (merchantProducts.length > 0) {
-      return merchantProducts;
-    }
-
-    // Fallback: fetch all products from merchant's categories
-    const allCategoryProducts: Product[] = [];
-    for (const category of merchant.dummyjsonCategories) {
-      const categoryProducts = await fetchProductsByCategory(category);
-
-      const filtered = keywords.length > 0
-        ? categoryProducts.filter((item: any) =>
-            keywords.some(kw =>
-              item.title.toLowerCase().includes(kw) ||
-              item.description.toLowerCase().includes(kw) ||
-              item.category.toLowerCase().includes(kw) ||
-              item.tags?.some((t: string) => t.toLowerCase().includes(kw))
-            )
-          )
-        : categoryProducts;
-
-      allCategoryProducts.push(
-        ...filtered.map((item: any) => transformDummyProduct(item, merchantId))
-      );
-    }
-    return allCategoryProducts;
-  }
-
-  return [];
+  return products.filter(product => {
+    const searchableText = `${product.name} ${product.description} ${product.category} ${product.tags.join(' ')}`.toLowerCase();
+    return keywords.some(keyword => searchableText.includes(keyword));
+  });
 }
 
-// Get all products for a merchant
+// Get all products for a merchant.
 export async function getMerchantProducts(merchantId: string): Promise<Product[]> {
-  const merchant = merchantsDB.find(m => m.id === merchantId);
-  if (!merchant) return [];
-
-  // Check if it's a local merchant
-  const isLocalMerchant = localMerchantsDB.some(m => m.id === merchantId);
-
-  if (isLocalMerchant) {
-    return localProductsDB.filter(p => p.merchantId === merchantId && p.inStock);
-  }
-
-  // DummyJSON merchant
-  if (merchant.dummyjsonCategories) {
-    const allProducts: Product[] = [];
-    for (const category of merchant.dummyjsonCategories) {
-      const categoryProducts = await fetchProductsByCategory(category);
-      allProducts.push(
-        ...categoryProducts.map((item: any) => transformDummyProduct(item, merchantId))
-      );
-    }
-    return allProducts;
-  }
-
-  return [];
+  if (!localMerchantsDB.some(merchant => merchant.id === merchantId)) return [];
+  return localProductsDB.filter(product => product.merchantId === merchantId && product.inStock);
 }
 
-// Legacy sync functions for backward compatibility
+// Legacy sync functions for backward compatibility.
 export function searchMerchantsSync(query: string): Merchant[] {
   const q = query.toLowerCase();
   const keywords = q.split(/\s+/).filter(word => word.length > 2);

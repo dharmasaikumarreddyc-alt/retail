@@ -62,7 +62,8 @@ class AuthService:
     ) -> UserDB:
         """Create a new user."""
         # Check if user exists
-        result = await db.execute(select(UserDB).where(UserDB.email == email))
+        normalized_email = email.strip().lower()
+        result = await db.execute(select(UserDB).where(UserDB.email == normalized_email))
         if result.scalar_one_or_none():
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -72,7 +73,7 @@ class AuthService:
         # Create user
         hashed_password = AuthService.get_password_hash(password)
         user = UserDB(
-            email=email,
+            email=normalized_email,
             name=name,
             password_hash=hashed_password
         )
@@ -111,7 +112,8 @@ class AuthService:
         password: str
     ) -> Optional[UserDB]:
         """Authenticate user with email and password."""
-        result = await db.execute(select(UserDB).where(UserDB.email == email))
+        normalized_email = email.strip().lower()
+        result = await db.execute(select(UserDB).where(UserDB.email == normalized_email))
         user = result.scalar_one_or_none()
 
         if not user:

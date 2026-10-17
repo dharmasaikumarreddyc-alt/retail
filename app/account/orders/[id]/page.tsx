@@ -1,10 +1,13 @@
 'use client';
 
-import { useState, useEffect, useRef, use } from 'react';
+import { useState, useEffect, useRef, use, useCallback } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import Header from '../../../components/Header';
 import AccountSidebar from '../../../components/AccountSidebar';
+import OrderReviewForm from '../../../components/OrderReviewForm';
+import { getAuthenticatedSession } from '../../../lib/auth';
+import { backendUrl } from '../../../lib/backend';
 
 interface TimelineEvent {
   status: string;
@@ -17,13 +20,16 @@ interface Order {
   merchantId: string;
   merchantName: string;
   merchantAddress: string;
+  deliveryAddress?: string;
   items: Array<{
     productId: string;
     name: string;
     price: number;
     quantity: number;
     image: string;
+    cookingInstructions?: string;
   }>;
+  cookingInstructions?: string;
   pricing: {
     subtotal: number;
     serviceFee: number;
@@ -42,6 +48,7 @@ interface Order {
   createdAt: string;
   estimatedReady: string;
   timeline?: TimelineEvent[];
+  review?: { rating: number; review: string; createdAt: string } | null;
 }
 
 export default function OrderDetailsPage({ params }: { params: Promise<{ id: string }> }) {
@@ -54,35 +61,72 @@ export default function OrderDetailsPage({ params }: { params: Promise<{ id: str
   const [lastSync, setLastSync] = useState('');
   const terminalRef = useRef(false);
 
-  useEffect(() => {
-    const token = localStorage.getItem('token');
-    if (!token) {
-      router.push('/login');
-      return;
-    }
-
-    fetchOrder();
-    // Live updates: poll until the order reaches a terminal state, so the
-    // customer sees the merchant advance it (confirmed -> preparing -> ready...).
-    const interval = setInterval(() => {
-      if (terminalRef.current) return;
-      fetchOrder();
-    }, 4000);
-    return () => clearInterval(interval);
-  }, [resolvedParams.id, router]);
-
-  const fetchOrder = async () => {
+  const fetchOrder = useCallback(async (token: string) => {
     try {
-      const response = await fetch(`/api/orders/${resolvedParams.id}`, { cache: 'no-store' });
+      const response = await fetch(`${backendUrl}/orders/${resolvedParams.id}`, {
+        cache: 'no-store',
+        headers: { Authorization: `Bearer ${token}` },
+      });
       if (response.ok) {
         const data = await response.json();
-        if (data.success) {
-          setOrder(data.order);
-          setLastSync(new Date().toLocaleTimeString());
-          terminalRef.current = data.order.status === 'delivered' || data.order.status === 'cancelled';
-        } else {
-          setError('Order not found');
-        }
+        const items = (data.items || []).map((item: {
+          productId?: string;
+          product_id?: string;
+          name: string;
+          price: number;
+          quantity?: number;
+          qty?: number;
+          image?: string;
+          cookingInstructions?: string;
+        }) => ({
+          productId: item.productId || item.product_id || item.name,
+          name: item.name,
+          price: item.price,
+          quantity: item.quantity ?? item.qty ?? 1,
+          image: item.image || '/images/shop/small/pic1.png',
+          cookingInstructions: item.cookingInstructions || '',
+        }));
+        const subtotal = items.reduce((sum: number, item: { price: number; quantity: number }) => sum + item.price * item.quantity, 0);
+        const order: Order = {
+          id: data.id,
+          merchantId: data.merchantId || '',
+          merchantName: data.merchantName || data.merchant,
+          merchantAddress: data.merchantAddress || '',
+          deliveryAddress: data.address || '',
+          items,
+          cookingInstructions:
+            data.cookingInstructions ||
+            items.find((item: { cookingInstructions?: string }) => item.cookingInstructions)?.cookingInstructions ||
+            (data.steps || []).find((step: { label?: string }) => step.label?.toLowerCase() === 'cooking instructions')?.detail ||
+            '',
+          pricing: data.pricing || {
+            subtotal,
+            serviceFee: 0,
+            deliveryFee: 0,
+            tax: 0,
+            loyaltyDiscount: 0,
+            total: data.total,
+          },
+          payment: data.payment || { token: '', method: 'unknown', status: 'unknown' },
+          status: data.status,
+          loyaltyPointsEarned: 0,
+          createdAt: data.createdAt,
+          estimatedReady: '15-25 min',
+          timeline: (data.steps || []).map((step: { label: string; time: string; detail?: string }) => ({
+            status: step.label,
+            time: step.time,
+            description:
+              step.label === 'Order placed' && step.detail?.toLowerCase().includes('payment not collected')
+                ? 'Order placed successfully.'
+                : step.detail || '',
+          })),
+          review: data.review || null,
+        };
+        setOrder(order);
+        setLastSync(new Date().toLocaleTimeString());
+        terminalRef.current = order.status === 'delivered' || order.status === 'cancelled';
+      } else if (response.status === 404) {
+        setError('Order not found');
       } else {
         setError('Failed to fetch order');
       }
@@ -92,7 +136,29 @@ export default function OrderDetailsPage({ params }: { params: Promise<{ id: str
     } finally {
       setLoading(false);
     }
-  };
+  }, [resolvedParams.id]);
+
+  useEffect(() => {
+    let interval: ReturnType<typeof setInterval> | undefined;
+    let cancelled = false;
+    const verifyAndLoad = async () => {
+      const session = await getAuthenticatedSession('customer');
+      if (!session) {
+        router.replace('/login');
+        return;
+      }
+      if (cancelled) return;
+      await fetchOrder(session.token);
+      interval = setInterval(() => {
+        if (!terminalRef.current) void fetchOrder(session.token);
+      }, 4000);
+    };
+    void verifyAndLoad();
+    return () => {
+      cancelled = true;
+      if (interval) clearInterval(interval);
+    };
+  }, [fetchOrder, router]);
 
   const formatDate = (dateString: string) => {
     const date = new Date(dateString);
@@ -201,7 +267,7 @@ export default function OrderDetailsPage({ params }: { params: Promise<{ id: str
                   </div>
                   <div className="clearfix m-l20">
                     <div className={`badge ${statusInfo.bg}`}>{statusInfo.label}</div>
-                    {!terminalRef.current && (
+                    {order.status !== 'delivered' && order.status !== 'cancelled' && (
                       <span className="badge bg-light text-dark ms-2">
                         <span className="spinner-grow spinner-grow-sm text-success me-1" style={{ width: '0.5rem', height: '0.5rem' }}></span>
                         Live{lastSync && ` • ${lastSync}`}
@@ -275,6 +341,12 @@ export default function OrderDetailsPage({ params }: { params: Promise<{ id: str
                         <span className="text-muted">${(item.price * item.quantity).toFixed(2)}</span>
                       </div>
                     ))}
+                    {order.cookingInstructions && (
+                      <div className="alert alert-light border mt-3 mb-0">
+                        <strong>Cooking instructions:</strong>
+                        <p className="mb-0 mt-1">{order.cookingInstructions}</p>
+                      </div>
+                    )}
                     {order.pricing.loyaltyDiscount > 0 && (
                       <div className="d-flex justify-content-between py-1 text-success">
                         <span>Discount applied</span>
@@ -355,8 +427,8 @@ export default function OrderDetailsPage({ params }: { params: Promise<{ id: str
                   </div>
                   <div className="col-sm-6">
                     <div className="shiping-tracker-detail">
-                      <span>Address</span>
-                      <h6 className="title">{order.merchantAddress}</h6>
+                      <span>Delivery address</span>
+                      <h6 className="title">{order.deliveryAddress || order.merchantAddress}</h6>
                     </div>
                   </div>
                 </div>
@@ -400,6 +472,14 @@ export default function OrderDetailsPage({ params }: { params: Promise<{ id: str
                         role="tab"
                       >
                         Payment
+                      </button>
+                      <button
+                        className={`nav-link ${activeTab === 'review' ? 'active' : ''}`}
+                        onClick={() => setActiveTab('review')}
+                        type="button"
+                        role="tab"
+                      >
+                        Rate & Review
                       </button>
                     </div>
                   </div>
@@ -454,6 +534,11 @@ export default function OrderDetailsPage({ params }: { params: Promise<{ id: str
                               <h6 className="title">{item.name}</h6>
                               <small className="d-block"><strong>Price</strong>: ${item.price.toFixed(2)}</small>
                               <small className="d-block"><strong>Quantity</strong>: {item.quantity}</small>
+                              {item.cookingInstructions && (
+                                <small className="d-block mt-2">
+                                  <strong>Cooking instructions:</strong> {item.cookingInstructions}
+                                </small>
+                              )}
                             </div>
                           </div>
                         ))}
@@ -495,10 +580,26 @@ export default function OrderDetailsPage({ params }: { params: Promise<{ id: str
                           <li>Order Number: <strong>#{order.id}</strong></li>
                           <li>Date: <strong>{formatTime(order.createdAt)}</strong></li>
                           <li>Total: <strong>${order.pricing.total.toFixed(2)}</strong></li>
-                          <li>Payment Method: <strong>{order.payment.method.charAt(0).toUpperCase() + order.payment.method.slice(1)}</strong></li>
-                          <li>Payment Status: <strong>{order.payment.status.charAt(0).toUpperCase() + order.payment.status.slice(1)}</strong></li>
+                          <li>Mode of Payment: <strong>{order.payment.method === 'cod' ? 'Cash on Delivery' : order.payment.method.toUpperCase()}</strong></li>
                           <li>Loyalty Points Earned: <strong>{order.loyaltyPointsEarned} points</strong></li>
                         </ul>
+                      </div>
+                    )}
+
+                    {activeTab === 'review' && (
+                      <div className="tab-pane fade show active" role="tabpanel">
+                        <h5>Rate this order</h5>
+                        {order.review ? (
+                          <div className="card card-body">
+                            <strong>{order.review.rating} ★</strong>
+                            <p className="mb-1">{order.review.review || 'No written comment provided.'}</p>
+                            <small className="text-muted">Submitted {formatTime(order.review.createdAt)}</small>
+                          </div>
+                        ) : order.status === 'cancelled' ? (
+                          <p className="text-muted">Cancelled orders cannot be reviewed.</p>
+                        ) : (
+                          <OrderReviewForm orderId={order.id} />
+                        )}
                       </div>
                     )}
                   </div>

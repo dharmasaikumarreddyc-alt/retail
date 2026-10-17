@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import Header from '../../components/Header';
 import AccountSidebar from '../../components/AccountSidebar';
+import { getAuthenticatedSession } from '../../lib/auth';
 
 interface Address {
   id: string;
@@ -38,13 +39,14 @@ export default function AddressPage() {
   });
 
   useEffect(() => {
-    const token = localStorage.getItem('token');
-    if (!token) {
-      router.push('/login');
-      return;
-    }
-
-    fetchAddresses();
+    const verifyAndLoad = async () => {
+      if (!(await getAuthenticatedSession('customer'))) {
+        router.replace('/login');
+        return;
+      }
+      fetchAddresses();
+    };
+    void verifyAndLoad();
   }, [router]);
 
   const fetchAddresses = () => {
@@ -53,20 +55,7 @@ export default function AddressPage() {
     if (saved) {
       setAddresses(JSON.parse(saved));
     } else {
-      // Default demo address
-      setAddresses([
-        {
-          id: 'addr-1',
-          name: 'Home',
-          street: 'Plot No. 123, Hitech City Road',
-          city: 'Hyderabad',
-          state: 'Telangana',
-          zip: '500081',
-          country: 'India',
-          phone: '+91 9876543210',
-          isDefault: true,
-        },
-      ]);
+      setAddresses([]);
     }
     setLoading(false);
   };

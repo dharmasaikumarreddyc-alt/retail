@@ -5,6 +5,8 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import Header from '../../components/Header';
 import AccountSidebar from '../../components/AccountSidebar';
+import { backendUrl } from '../../lib/backend';
+import { clearAuthenticatedToken, getAuthenticatedSession } from '../../lib/auth';
 
 interface DashboardStats {
   totalOrders: number;
@@ -24,31 +26,34 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const token = localStorage.getItem('token');
-    if (!token) {
-      router.push('/login');
-      return;
-    }
-
-    fetchUserInfo();
-    fetchStats();
+    const loadAccount = async () => {
+      const session = await getAuthenticatedSession('customer');
+      if (!session) {
+        router.replace('/login');
+        return;
+      }
+      await Promise.all([fetchUserInfo(), fetchStats()]);
+    };
+    void loadAccount();
   }, [router]);
 
   const fetchUserInfo = async () => {
     try {
-      const token = localStorage.getItem('token');
-      if (!token) return;
+      const session = await getAuthenticatedSession('customer');
+      if (!session) return;
+      setUserName(session.profile.name?.trim() || session.profile.email || 'User');
+      setUserEmail(session.profile.email || '');
 
-      const response = await fetch('http://localhost:8000/auth/me', {
+      const response = await fetch(`${backendUrl}/auth/me`, {
         headers: {
-          'Authorization': `Bearer ${token}`
+          'Authorization': `Bearer ${session.token}`
         }
       });
 
       if (response.ok) {
         const data = await response.json();
-        setUserName(data.name || data.email || 'User');
-        setUserEmail(data.email || '');
+        setUserName(data.name?.trim() || session.profile.name?.trim() || data.email || session.profile.email || 'User');
+        setUserEmail(data.email || session.profile.email || '');
       }
     } catch (error) {
       console.error('Error fetching user info:', error);
@@ -76,7 +81,7 @@ export default function DashboardPage() {
   };
 
   const handleLogout = () => {
-    localStorage.removeItem('token');
+    clearAuthenticatedToken('customer');
     window.dispatchEvent(new Event('authChanged'));
     router.push('/');
   };

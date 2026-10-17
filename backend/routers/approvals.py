@@ -4,16 +4,13 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
 from typing import List
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from database import get_db
-from database.models import ApprovalDB, OrderDB
-from models.approval import ApprovalResponse, ApprovalAction
+from database.models import ApprovalDB
 from routers.auth import get_current_user
-from agents import AgentOrchestrator
 
 router = APIRouter(prefix="/approvals", tags=["Approvals"])
-orchestrator = AgentOrchestrator()
 
 
 def format_expires(expires_at: datetime) -> str:
@@ -99,82 +96,38 @@ async def get_approval_count(
 async def approve_purchase(
     approval_id: str,
     current_user = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
 ):
     """Approve a pending purchase."""
     result = await db.execute(
         select(ApprovalDB).where(
             ApprovalDB.id == approval_id,
-            ApprovalDB.user_id == current_user.id
+            ApprovalDB.user_id == current_user.id,
         )
     )
     approval = result.scalar_one_or_none()
-
-    if not approval:
+    if approval is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Approval not found"
+            detail="Approval not found",
         )
-
     if approval.status != "pending":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Approval is already {approval.status}"
+            detail=f"Approval is already {approval.status}",
         )
-
     if approval.expires_at < datetime.utcnow():
         approval.status = "expired"
         await db.commit()
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Approval has expired"
+            detail="Approval has expired",
         )
 
-    # Execute the approved purchase
-    approval_data = {
-        "merchant": approval.merchant,
-        "item": approval.item,
-        "qty": approval.qty,
-        "amount": approval.amount
-    }
-
-    checkout_result = await orchestrator.approve_purchase(
-        approval_data=approval_data,
-        user_address="123 Main St, Mumbai 400001"  # Would come from user profile
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail="Purchase approval execution is disabled until a real payment provider and authenticated order processing are configured.",
     )
-
-    if checkout_result.get("success"):
-        approval.status = "approved"
-
-        # Create order from checkout result
-        order_data = checkout_result["order"]
-        order = OrderDB(
-            id=order_data["id"],
-            user_id=current_user.id,
-            merchant=order_data["merchant"],
-            items=order_data["items"],
-            total=order_data["total"],
-            savings=order_data.get("savings", 0),
-            date=order_data["date"],
-            status=order_data["status"],
-            agent_task=order_data["agent_task"],
-            card=order_data["card"],
-            address=order_data["address"],
-            steps=order_data["steps"]
-        )
-        db.add(order)
-        await db.commit()
-
-        return {
-            "status": "approved",
-            "message": "Purchase approved and order placed",
-            "order_id": order.id
-        }
-    else:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to process approved purchase"
-        )
 
 
 @router.post("/{approval_id}/decline")

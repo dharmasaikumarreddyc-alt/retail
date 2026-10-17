@@ -103,21 +103,33 @@ export async function POST(request: NextRequest) {
 
     // Try the real AI agent first; fall back to keyword matching.
     const ai = await aiSelectProducts(merchantId, merchant.name, query || '', allMerchantProducts);
-    const fallbackProducts = await searchProducts(merchantId, query || '');
-    const products = ai?.products ?? fallbackProducts;
+    const matchingProducts = await searchProducts(merchantId, query || '');
+    const catalogAlternatives =
+      !ai && matchingProducts.length === 0 ? allMerchantProducts.slice(0, 3) : [];
+    const products = ai?.products ?? (matchingProducts.length > 0 ? matchingProducts : catalogAlternatives);
     const usedAI = Boolean(ai);
 
-    // Check if we have alternatives (not exact matches)
-    const hasAlternatives = ai?.alternatives && ai.alternatives.length > 0;
-    const exactMatchFound = ai?.exactMatchFound ?? true;
+    const alternatives =
+      ai?.alternatives ??
+      catalogAlternatives.map((product) => ({
+        productId: product.id,
+        originalRequest: query || 'your request',
+        reason: `Available at ${merchant.name}`,
+      }));
+    const hasAlternatives = alternatives.length > 0;
+    const exactMatchFound = ai?.exactMatchFound ?? catalogAlternatives.length === 0;
 
     // Build appropriate message
     let message = '';
     let alternativeMessage = '';
-    if (products.length === 0) {
+    if (catalogAlternatives.length > 0) {
+      const names = catalogAlternatives.map((product) => product.name).join(', ');
+      message = `No exact match found at ${merchant.name}`;
+      alternativeMessage = `I couldn't find an exact match for "${query}" at ${merchant.name}. Here are some items actually available there: ${names}. Would you like one of these instead?`;
+    } else if (products.length === 0) {
       message = `No matching products found at ${merchant.name}`;
-    } else if (hasAlternatives && !exactMatchFound) {
-      const altItems = ai!.alternatives.map(a => a.originalRequest).join(', ');
+    } else if (ai && hasAlternatives && !exactMatchFound) {
+      const altItems = alternatives.map(a => a.originalRequest).join(', ');
       message = `"${altItems}" is not available at ${merchant.name}`;
       alternativeMessage = `We found a similar alternative: ${products.map(p => p.name).join(', ')}. Would you like this instead?`;
     } else {
@@ -136,10 +148,10 @@ export async function POST(request: NextRequest) {
         products,
         count: products.length,
         message,
-        spoken: ai?.spoken,
+        spoken: catalogAlternatives.length > 0 ? alternativeMessage : ai?.spoken,
         exactMatchFound,
         hasAlternatives,
-        alternatives: ai?.alternatives || [],
+        alternatives,
         alternativeMessage,
       },
     };

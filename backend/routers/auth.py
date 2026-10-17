@@ -3,10 +3,12 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 from datetime import timedelta
 
 from database import get_db
 from services.auth_service import AuthService
+from database.models import MerchantAccountDB
 from models.user import UserCreate, UserLogin, UserResponse, Token
 from config import settings
 
@@ -105,13 +107,22 @@ async def login_json(credentials: UserLogin, db: AsyncSession = Depends(get_db))
 
 
 @router.get("/me", response_model=UserResponse)
-async def get_me(current_user = Depends(get_current_user)):
+async def get_me(
+    current_user = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
     """Get current user profile."""
+    account_result = await db.execute(
+        select(MerchantAccountDB).where(MerchantAccountDB.user_id == current_user.id)
+    )
+    merchant_account = account_result.scalar_one_or_none()
     return UserResponse(
         id=current_user.id,
         email=current_user.email,
         name=current_user.name,
-        agent_paused=current_user.agent_paused
+        agent_paused=current_user.agent_paused,
+        role="merchant" if merchant_account else "customer",
+        merchant_id=merchant_account.merchant_id if merchant_account else None,
     )
 
 

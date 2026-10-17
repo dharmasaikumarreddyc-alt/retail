@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server';
-import { localProductsDB, localMerchantsDB, searchDummyJsonAPI } from '../agents/data';
-
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
+import { localProductsDB, localMerchantsDB } from '../agents/data';
+import { backendUrl, optionalBackendUrl } from '../../lib/backend';
 
 export interface Product {
   id: string | number;
@@ -41,47 +40,28 @@ function transformLocalProduct(p: any): Product {
   };
 }
 
-// Transform DummyJSON product to shop format
-function transformDummyProduct(item: any): Product {
-  return {
-    id: `dj-${item.id}`,
-    name: item.title,
-    price: Math.round(item.price * 100) / 100, // Keep USD price
-    originalPrice: Math.round((item.price / (1 - (item.discountPercentage || 0) / 100)) * 100) / 100,
-    discount: item.discountPercentage ? `${Math.round(item.discountPercentage)}%` : undefined,
-    image: item.thumbnail || item.images?.[0] || '',
-    category: [item.category],
-    tags: item.tags || [],
-    description: item.description,
-    merchant: item.brand || 'Online Store',
-    merchant_id: 'dummyjson',
-    location: 'Hyderabad',
-    rating: item.rating || 4.0,
-    inStock: item.stock > 0,
-  };
-}
-
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
-  const category = searchParams.get('category');
-  const search = searchParams.get('search');
-  const limit = parseInt(searchParams.get('limit') || '50');
+  const category = searchParams.get('category')?.trim().toLowerCase();
+  const search = searchParams.get('search')?.trim().toLowerCase();
+  const requestedLimit = Number.parseInt(searchParams.get('limit') || '50', 10);
+  const limit = Number.isFinite(requestedLimit) && requestedLimit > 0 ? requestedLimit : 50;
 
   // Try Python backend first if configured
-  if (process.env.NEXT_PUBLIC_BACKEND_URL) {
+  if (optionalBackendUrl) {
     try {
       const params = new URLSearchParams();
       if (category) params.append('category', category);
       if (search) params.append('search', search);
       if (limit) params.append('limit', limit.toString());
 
-      const response = await fetch(`${BACKEND_URL}/products?${params.toString()}`);
+      const response = await fetch(`${backendUrl}/products?${params.toString()}`);
       if (response.ok) {
         const data = await response.json();
-        if (data.products && data.products.length > 0) {
+        if (data.success && Array.isArray(data.products)) {
           return NextResponse.json({
             products: data.products,
-            total: data.total || data.products.length,
+            total: data.total ?? data.products.length,
             success: true,
           });
         }
@@ -91,52 +71,23 @@ export async function GET(request: Request) {
     }
   }
 
-  // Fallback: Combine local products + DummyJSON products
+  // Offline fallback is restricted to products in the app's local food catalog.
   try {
-    let products: Product[] = [];
-
-    // Add local products
-    let localProducts = localProductsDB.map(transformLocalProduct);
-
-    // Filter by search
-    if (search) {
-      const q = search.toLowerCase();
-      localProducts = localProducts.filter(p =>
-        p.name.toLowerCase().includes(q) ||
-        p.description.toLowerCase().includes(q) ||
-        p.tags.some(t => t.toLowerCase().includes(q)) ||
-        p.category.some(c => c.toLowerCase().includes(q))
-      );
-    }
-
-    // Filter by category
-    if (category) {
-      const cat = category.toLowerCase();
-      localProducts = localProducts.filter(p =>
-        p.category.some(c => c.toLowerCase().includes(cat)) ||
-        p.tags.some(t => t.toLowerCase().includes(cat))
-      );
-    }
-
-    products = [...localProducts];
-
-    // Fetch from DummyJSON if search provided or want more products
-    if (search || products.length < limit) {
-      const dummyProducts = await searchDummyJsonAPI(search || 'phone laptop watch perfume');
-      const transformedDummy = dummyProducts.map(transformDummyProduct);
-
-      // Filter DummyJSON by category if needed
-      let filteredDummy = transformedDummy;
-      if (category) {
-        const cat = category.toLowerCase();
-        filteredDummy = transformedDummy.filter(p =>
-          p.category.some(c => c.toLowerCase().includes(cat)) ||
-          p.tags.some(t => t.toLowerCase().includes(cat))
-        );
-      }
-
-      products = [...products, ...filteredDummy];
-    }
+    const searchTerms = search?.split(/\s+/).filter(Boolean) ?? [];
+    const products = localProductsDB
+      .map(transformLocalProduct)
+      .filter(product => {
+        const categoryMatches = !category || product.category.some(value => value.toLowerCase().includes(category));
+        const searchableText = [
+          product.name,
+          product.description,
+          product.merchant,
+          ...product.category,
+          ...product.tags,
+        ].join(' ').toLowerCase();
+        const searchMatches = searchTerms.every(term => searchableText.includes(term));
+        return categoryMatches && searchMatches;
+      });
 
     // Apply limit
     const limitedProducts = products.slice(0, limit);

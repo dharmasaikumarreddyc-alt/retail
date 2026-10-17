@@ -3,6 +3,8 @@
 import { useState, useEffect, useRef } from 'react';
 import { usePathname } from 'next/navigation';
 import Link from 'next/link';
+import { optionalBackendUrl } from '../lib/backend';
+import { clearAuthenticatedToken, getAuthenticatedSession } from '../lib/auth';
 
 export default function Header() {
   const [cartCount, setCartCount] = useState(0);
@@ -13,39 +15,6 @@ export default function Header() {
   const selectInitialized = useRef(false);
   const initTimerRef = useRef<NodeJS.Timeout | null>(null);
   const dropdownRef = useRef<HTMLLIElement>(null);
-
-  useEffect(() => {
-    checkAuthStatus();
-    fetchCartCount();
-
-    // Listen for cart updates
-    const handleCartUpdate = () => {
-      fetchCartCount();
-    };
-
-    // Listen for auth changes
-    const handleAuthChange = () => {
-      checkAuthStatus();
-      fetchCartCount();
-    };
-
-    // Close dropdown when clicking outside
-    const handleClickOutside = (event: MouseEvent) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
-        setShowProfileDropdown(false);
-      }
-    };
-
-    window.addEventListener('cartUpdated', handleCartUpdate);
-    window.addEventListener('authChanged', handleAuthChange);
-    document.addEventListener('mousedown', handleClickOutside);
-
-    return () => {
-      window.removeEventListener('cartUpdated', handleCartUpdate);
-      window.removeEventListener('authChanged', handleAuthChange);
-      document.removeEventListener('mousedown', handleClickOutside);
-    };
-  }, []);
 
   useEffect(() => {
     // Reinitialize bootstrap-select when route changes
@@ -88,40 +57,13 @@ export default function Header() {
   }, [pathname]);
 
   const checkAuthStatus = async () => {
-    const token = localStorage.getItem('token');
-    if (token) {
-      setIsLoggedIn(true);
-      await fetchUserInfo();
-    } else {
-      setIsLoggedIn(false);
-      setUserName('');
-    }
-  };
-
-  const fetchUserInfo = async () => {
-    // Skip the backend call when it isn't configured (demo runs without it).
-    const backend = process.env.NEXT_PUBLIC_BACKEND_URL;
-    if (!backend) {
-      setUserName('Account');
-      return;
-    }
-    try {
-      const token = localStorage.getItem('token');
-      if (!token) return;
-      const response = await fetch(`${backend}/auth/me`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (response.ok) {
-        const data = await response.json();
-        setUserName(data.name || data.email || 'User');
-      }
-    } catch {
-      setUserName('User');
-    }
+    const session = await getAuthenticatedSession('customer');
+    setIsLoggedIn(Boolean(session));
+    setUserName(session?.profile.name || session?.profile.email || '');
   };
 
   const handleLogout = () => {
-    localStorage.removeItem('token');
+    clearAuthenticatedToken('customer');
     setIsLoggedIn(false);
     setUserName('');
     setCartCount(0);
@@ -131,20 +73,20 @@ export default function Header() {
   };
 
   const fetchCartCount = async () => {
-    const backend = process.env.NEXT_PUBLIC_BACKEND_URL;
+    const backend = optionalBackendUrl;
     if (!backend) {
       setCartCount(0);
       return;
     }
     try {
-      const token = localStorage.getItem('token');
-      if (!token) {
+      const session = await getAuthenticatedSession('customer');
+      if (!session) {
         setCartCount(0);
         return;
       }
 
       const response = await fetch(`${backend}/cart`, {
-        headers: { Authorization: `Bearer ${token}` },
+        headers: { Authorization: `Bearer ${session.token}` },
       });
 
       if (response.ok) {
@@ -158,6 +100,33 @@ export default function Header() {
       setCartCount(0);
     }
   };
+
+  useEffect(() => {
+    checkAuthStatus();
+    fetchCartCount();
+
+    const handleCartUpdate = () => {
+      fetchCartCount();
+    };
+    const handleAuthChange = () => {
+      checkAuthStatus();
+      fetchCartCount();
+    };
+    const handleClickOutside = (event: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setShowProfileDropdown(false);
+      }
+    };
+
+    window.addEventListener('cartUpdated', handleCartUpdate);
+    window.addEventListener('authChanged', handleAuthChange);
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      window.removeEventListener('cartUpdated', handleCartUpdate);
+      window.removeEventListener('authChanged', handleAuthChange);
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, []);
 
   return (
 <header className="site-header mo-left header style-2" style={{ marginBottom: '0', paddingBottom: '0' }}>
@@ -190,26 +159,17 @@ export default function Header() {
 				
 				{/* header search nav */}
 				<div className="header-search-nav">
-					<form className="header-item-search">
+					<form className="header-item-search" action="/shop" method="get">
 						<div className="input-group search-input">
-							<select className="default-select" style={{ minWidth: '150px' }}>
-								<option>All Categories</option>
-								<option>Photography </option>
-								<option>Arts</option>
-								<option>Adventure</option>
-								<option>Action</option>
-								<option>Games</option>
-								<option>Movies</option>
-								<option>Comics</option>
-								<option>Biographies</option>
-								<option>Children’s Books</option>
-								<option>Historical</option>
-								<option>Contemporary</option>
-								<option>Classics</option>
-								<option>Education</option>
-							</select>
-							<input type="text" className="form-control" aria-label="Text input with dropdown button" placeholder="Search for products" />
-							<button className="btn" type="button">
+							<select name="category" className="default-select" style={{ minWidth: '150px' }}>
+    <option value="">All Food &amp; Drinks</option>
+    <option value="Breakfast">Breakfast</option>
+    <option value="Drinks">Drinks</option>
+    <option value="Bakery">Bakery</option>
+    <option value="Lunch">Lunch</option>
+</select>
+							<input name="search" type="search" className="form-control" aria-label="Search food and drinks" placeholder="Search food and drinks" />
+							<button className="btn" type="submit" aria-label="Search">
 								<i className="iconly-Light-Search text-secondary"></i>
 							</button>
 						</div>
@@ -240,208 +200,21 @@ export default function Header() {
 						<div className="logo-header">
 							<Link href="/"><img src="/images/logo.svg" alt="" /></Link>
 						</div>
-						<div className="browse-category-menu">
-							<a href="#" className="category-btn">
-								<div className="category-menu me-3">
-									<span></span>
-									<span></span>
-									<span></span>
-								</div>
-								<span className="category-btn-title">
-									Browse Categories
-								</span>
-								<span className="toggle-arrow ms-auto">
-									<i className="icon feather icon-chevron-down"></i>
-								</span>
-							</a>
-							<div className="category-menu-items" style={{display: 'none'}}>
-								<ul className="nav navbar-nav">
-									<li className="has-mega-menu cate-drop">
-										<a href="#">
-											<i className="icon feather icon-arrow-right"></i>
-											<span>Clothes</span>
-											<span className="menu-icon">
-												<i className="icon feather icon-chevron-right"></i>
-											</span>
-										</a>
-										<div className="mega-menu">
-											<div className="row">
-												<div className="col-md-3 col-sm-4 col-6"><a href="#" className="menu-title">Smart Home Products</a>
-													<ul>
-														<li><Link href="/shop">Thermostats</Link></li>
-														<li><Link href="/shop">Lighting</Link></li>
-														<li><Link href="/shop">Security Systems<span className="badge bg-primary">NEW</span></Link></li>
-														<li><Link href="/shop">Locks</Link></li>
-														<li><Link href="/shop">Home Assistants</Link></li>
-														<li><Link href="/shop">Home Entertainment Systems</Link></li>
-														<li><Link href="/shop">Blinds And Shades</Link></li>
-														<li><Link href="/shop">Water Monitors</Link></li>
-													</ul>
-												</div>
-												<div className="col-md-3 col-sm-4 col-6"><Link href="/shop" className="menu-title">Smart Home Products</Link>
-													<ul>
-														<li><Link href="/shop">Thermostats</Link></li>
-														<li><Link href="/shop">Lighting</Link></li>
-														<li><Link href="/shop">Security Systems</Link></li>
-														<li><Link href="/shop">Locks</Link></li>
-														<li><Link href="/shop">Home Assistants</Link></li>
-														<li><Link href="/shop">Home Entertainment Systems</Link></li>
-														<li><Link href="/shop">Blinds And Shades</Link></li>
-														<li><Link href="/shop">Water Monitors</Link></li>
-													</ul>
-												</div>
-												<div className="col-md-3 col-sm-4 col-6"> <Link href="/shop" className="menu-title">Smart Home Products</Link>
-													<ul>
-														<li><Link href="/shop">Thermostats</Link></li>
-														<li><Link href="/shop">Lighting</Link></li>
-														<li><Link href="/shop">Security Systems</Link></li>
-														<li><Link href="/shop">Locks</Link></li>
-														<li><Link href="/shop">Home Assistants</Link></li>
-														<li><Link href="/shop">Home Entertainment Systems</Link></li>
-														<li><Link href="/shop">Blinds And Shades</Link></li>
-														<li><Link href="/shop">Water Monitors<span className="badge bg-red">Offer</span></Link></li>
-													</ul>
-												</div>
-												<div className="col-md-3 col-sm-4 col-6"> <Link href="/shop" className="menu-title">Smart Home Products</Link>
-													<ul>
-														<li><Link href="/shop">Thermostats</Link></li>
-														<li><Link href="/shop">Lighting<span className="badge bg-secondary">Exclusive</span></Link></li>
-														<li><Link href="/shop">Security Systems</Link></li>
-														<li><Link href="/shop">Locks</Link></li>
-														<li><Link href="/shop">Home Assistants</Link></li>
-														<li><Link href="/shop">Home Entertainment Systems</Link></li>
-														<li><Link href="/shop">Blinds And Shades</Link></li>
-														<li><Link href="/shop">Water Monitors</Link></li>
-													</ul>
-												</div>
-												<div className="col-md-3 col-sm-4 col-6"><Link href="/shop" className="menu-title">Smart Home Products</Link>
-													<ul>
-														<li><Link href="/shop">Thermostats</Link></li>
-														<li><Link href="/shop">Lighting<span className="badge bg-orange">Feture</span></Link></li>
-														<li><Link href="/shop">Security Systems</Link></li>
-														<li><Link href="/shop">Locks</Link></li>
-														<li><Link href="/shop">Home Assistants</Link></li>
-													</ul>
-												</div>
-												<div className="col-md-3 col-sm-4 col-6"> <Link href="/shop" className="menu-title">Smart Home Products</Link>
-													<ul>
-														<li><Link href="/shop">Thermostats</Link></li>
-														<li><Link href="/shop">Lighting</Link></li>
-														<li><Link href="/shop">Security Systems</Link></li>
-														<li><Link href="/shop">Locks<span className="badge bg-purple">SALE</span></Link></li>
-														<li><Link href="/shop">Home Assistants</Link></li>
-														<li><Link href="/shop">Home Entertainment Systems</Link></li>
-														<li><Link href="/shop">Blinds And Shades</Link></li>
-													</ul>
-												</div>
-												<div className="col-md-3 col-sm-4 col-6"> <Link href="/shop" className="menu-title">Smart Home Products</Link>
-													<ul>
-														<li><Link href="/shop">Thermostats</Link></li>
-														<li><Link href="/shop">Lighting</Link></li>
-														<li><Link href="/shop">Security Systems</Link></li>
-														<li><Link href="/shop">Locks</Link></li>
-														<li><Link href="/shop">Home Assistants</Link></li>
-														<li><Link href="/shop">Home Entertainment Systems</Link></li>
-													</ul>
-												</div>
-												<div className="col-md-3 col-sm-4 col-6"> <Link href="/shop" className="menu-title">Smart Home Products</Link>
-													<ul>
-														<li><Link href="/shop">Thermostats</Link></li>
-														<li><Link href="/shop">Lighting</Link></li>
-														<li><Link href="/shop">Security Systems</Link></li>
-														<li><Link href="/shop">Locks</Link></li>
-														<li><Link href="/shop">Home Assistants</Link></li>
-													</ul>
-												</div>
-											</div>
-										</div>
-									</li>
-									<li className="cate-drop">
-										<a href="#">
-											<i className="icon feather icon-arrow-right"></i>
-											<span>UrbanSkirt</span>
-											<span className="menu-icon">
-												<i className="icon feather icon-chevron-right"></i>
-											</span>
-										</a>
-										<ul className="sub-menu">
-											<li><Link href="/shop">Thermostats</Link></li>
-											<li><Link href="/shop">Lighting</Link></li>
-											<li><Link href="/shop">Security Systems</Link></li>
-											<li><Link href="/shop">Locks</Link></li>
-											<li><Link href="/shop">Home Assistants</Link></li>
-											<li><Link href="/shop">Entertainment Systems</Link></li>
-											<li><Link href="/shop">Blinds And Shades</Link></li>
-											<li><Link href="/shop">Appliances</Link></li>
-											<li><Link href="/shop">Water Monitors</Link></li>
-											<li><Link href="/shop">Gardening Systems</Link></li>
-										</ul>
-									</li>
-									
-									<li>
-										<Link href="/shop">
-											<i className="icon feather icon-arrow-right"></i>
-											<span>VelvetGown</span>
-										</Link>
-									</li>
-									<li>
-										<Link href="/shop">
-											<i className="icon feather icon-arrow-right"></i>
-											<span>LushShorts</span>
-										</Link>
-									</li>
-									<li>
-										<Link href="/shop">
-											<i className="icon feather icon-arrow-right"></i>
-											<span>Vintage</span>
-										</Link>
-									</li>
-									<li>
-										<Link href="/shop">
-											<i className="icon feather icon-arrow-right"></i>
-											<span>Wedding </span>
-											<span className="badge bg-purple">SALE</span>
-										</Link>
-									</li>
-									<li>
-										<Link href="/shop">
-											<i className="icon feather icon-arrow-right"></i>
-											<span>Cotton</span>
-										</Link>
-									</li>
-									<li>
-										<Link href="/shop">
-											<i className="icon feather icon-arrow-right"></i>
-											<span>Linen</span>
-										</Link>
-									</li>
-									<li>
-										<Link href="/shop">
-											<i className="icon feather icon-arrow-right"></i>
-											<span>Navy</span>
-										</Link>
-									</li>
-									<li>
-										<Link href="/shop">
-											<i className="icon feather icon-arrow-right"></i>
-											<span>Urban</span>
-										</Link>
-									</li>
-									<li>
-										<Link href="/shop">
-											<i className="icon feather icon-arrow-right"></i>
-											<span>Business Meeting</span>
-										</Link>
-									</li>
-									<li className="menu-items">
-										<a href="#">
-											<i className="flaticon-blocks me-3"></i>
-											<span>More</span>
-										</a>
-									</li>
-								</ul>
-							</div>
-						</div>
+                        <div className="browse-category-menu">
+                            <a href="#" className="category-btn">
+                                <div className="category-menu me-3"><span></span><span></span><span></span></div>
+                                <span className="category-btn-title">Browse Food &amp; Drinks</span>
+                                <span className="toggle-arrow ms-auto"><i className="icon feather icon-chevron-down"></i></span>
+                            </a>
+                            <div className="category-menu-items" style={{display: 'none'}}>
+                                <ul className="nav navbar-nav">
+                                    <li><Link href="/shop?category=Breakfast">Breakfast</Link></li>
+                                    <li><Link href="/shop?category=Drinks">Drinks</Link></li>
+                                    <li><Link href="/shop?category=Bakery">Bakery</Link></li>
+                                    <li><Link href="/shop?category=Lunch">Lunch</Link></li>
+                                </ul>
+                            </div>
+                        </div>
 						<ul className="nav navbar-nav">
 							<li className="has-mega-menu sub-menu-down auto-width menu-left">
 								<a href="#"><span>Home</span><i className="fas fa-chevron-down tabindex" ></i></a>
@@ -969,7 +742,7 @@ export default function Header() {
 									</a>
 								</li>
 								<li className="nav-item">
-									<Link className="nav-link" href="/merchant" style={{ whiteSpace: 'nowrap' }} title="Merchant Console">
+									<Link className="nav-link" href="/merchant/login" style={{ whiteSpace: 'nowrap' }} title="Merchant Console">
 										<i className="fa fa-store"></i>
 									</Link>
 								</li>
@@ -1019,126 +792,118 @@ export default function Header() {
 				&times;
 			</button>
 			<div className="container">
-				<form className="header-item-search">
+				<form className="header-item-search" action="/shop" method="get">
 					<div className="input-group search-input">
-						<select className="default-select">
-							<option>All Categories</option>
-							<option>Clothes</option>
-							<option>UrbanSkirt</option>
-							<option>VelvetGown</option>
-							<option>LushShorts</option>
-							<option>Vintage</option>
-							<option>Wedding</option>
-							<option>Cotton</option>
-							<option>Linen</option>
-							<option>Navy</option>
-							<option>Urban</option>
-							<option>Business Meeting</option>
-							<option>Formal</option>
+						<select name="category" className="default-select">
+							<option value="">All Food &amp; Drinks</option>
+							<option value="Breakfast">Breakfast</option>
+							<option value="Drinks">Drinks</option>
+							<option value="Bakery">Bakery</option>
+							<option value="Lunch">Lunch</option>
 						</select>
-						<input type="search" className="form-control" placeholder="Search Product" />
-						<button className="btn" type="button">
+						<input name="search" type="search" className="form-control" placeholder="Search food and drinks" />
+						<button className="btn" type="submit">
 							<i className="iconly-Light-Search"></i>
 						</button>
 					</div>
 					<ul className="recent-tag">
 						<li className="pe-0"><span>Quick Search :</span></li>
-						<li><Link href="/shop">Clothes</Link></li>
-						<li><Link href="/shop">UrbanSkirt</Link></li>
-						<li><Link href="/shop">VelvetGown</Link></li>
-						<li><Link href="/shop">LushShorts</Link></li>
+						<li><Link href="/shop?search=coffee">Coffee</Link></li>
+						<li><Link href="/shop?search=bakery">Bakery</Link></li>
+						<li><Link href="/shop?search=breakfast">Breakfast</Link></li>
+						<li><Link href="/shop?search=dosa">Dosa</Link></li>
 					</ul>
 				</form>
 				<div className="row">
 					<div className="col-xl-12">
-						<h5 className="mb-3">You May Also Like</h5>
+						<h5 className="mb-3">Popular food and drinks</h5>
 						<div className="swiper category-swiper2">
 							<div className="swiper-wrapper">
 								<div className="swiper-slide">
 									<div className="shop-card">
 										<div className="dz-media ">
-											<img src="/images/shop/product/1.png" alt="image" />
+											<img src="/images/products/latte.jpg" alt="Oat milk latte" />
 										</div>
 										<div className="dz-content">
-											<h6 className="title"><Link href="/shop">SilkBliss Dress</Link></h6>
-											<h6 className="price">$40.00</h6>
+											<h6 className="title"><Link href="/shop?search=latte">Oat Milk Latte</Link></h6>
+											<h6 className="price">$5.75</h6>
 										</div>
 									</div>
 								</div>
 								<div className="swiper-slide">
 									<div className="shop-card">
 										<div className="dz-media ">
-											<img src="/images/shop/product/3.png" alt="image" />
+											<img src="/images/products/orange-juice.jpg" alt="Fresh orange juice" />
 										</div>
 										<div className="dz-content">
-											<h6 className="title"><Link href="/shop">GlamPants</Link></h6>
-											<h6 className="price">$30.00</h6>
+											<h6 className="title"><Link href="/shop?search=orange">Fresh Orange Juice</Link></h6>
+											<h6 className="price">$4.50</h6>
 										</div>
 									</div>
 								</div>
 								<div className="swiper-slide">
 									<div className="shop-card">
 										<div className="dz-media ">
-											<img src="/images/shop/product/4.png" alt="image" />
+											<img src="/images/products/croissant.jpg" alt="Almond croissant" />
 										</div>
 										<div className="dz-content">
-											<h6 className="title"><Link href="/shop">ComfyLeggings</Link></h6>
-											<h6 className="price">$35.00</h6>
+											<h6 className="title"><Link href="/shop?search=croissant">Almond Croissant</Link></h6>
+											<h6 className="price">$4.25</h6>
 										</div>
 									</div>
 								</div>
 								<div className="swiper-slide">
 									<div className="shop-card">
 										<div className="dz-media ">
-											<img src="/images/shop/product/2.png" alt="image" />
+											<img src="/images/products/blueberry-muffin.jpg" alt="Blueberry muffin" />
 										</div>
 										<div className="dz-content">
-											<h6 className="title"><Link href="/shop">ClassicCapri</Link></h6>
-											<h6 className="price">$20.00</h6>
+											<h6 className="title"><Link href="/shop?search=muffin">Blueberry Muffin</Link></h6>
+											<h6 className="price">$3.75</h6>
 										</div>
 									</div>
 								</div>
 								<div className="swiper-slide">
 									<div className="shop-card">
 										<div className="dz-media ">
-											<img src="/images/shop/product/5.png" alt="image" />
+											<img src="/images/products/cold-brew.jpg" alt="Signature cold brew" />
 										</div>
 										<div className="dz-content">
-											<h6 className="title"><Link href="/shop">DapperCoat</Link></h6>
-											<h6 className="price">$70.00</h6>
+											<h6 className="title"><Link href="/shop?search=cold+brew">Signature Cold Brew</Link></h6>
+											<h6 className="price">$5.50</h6>
 										</div>
 									</div>
 								</div>
 								<div className="swiper-slide">
 									<div className="shop-card">
 										<div className="dz-media ">
-											<img src="/images/shop/product/6.png" alt="image" />
+											<img src="/images/products/cappuccino.jpg" alt="Cappuccino" />
 										</div>
 										<div className="dz-content">
-											<h6 className="title"><Link href="/shop">ComfyLeggings</Link></h6>
-											<h6 className="price">$45.00</h6>
+											<h6 className="title"><Link href="/shop?search=cappuccino">Cappuccino</Link></h6>
+											<h6 className="price">$5.50</h6>
 										</div>
 									</div>
 								</div>
 								<div className="swiper-slide">
 									<div className="shop-card">
 										<div className="dz-media ">
-											<img src="/images/shop/product/7.png" alt="image" />	
+											<img src="/images/products/breakfast-platter.jpg" alt="Vegan breakfast platter" />
 										</div>
 										<div className="dz-content">
-											<h6 className="title"><Link href="/shop">DenimDream Jeans</Link></h6>
-											<h6 className="price">$40.00</h6>
+											<h6 className="title"><Link href="/shop?search=breakfast">Vegan Breakfast Platter</Link></h6>
+											<h6 className="price">$14.50</h6>
 										</div>
 									</div>
 								</div>
 								<div className="swiper-slide">
 									<div className="shop-card">
 										<div className="dz-media ">
-											<img src="/images/shop/product/4.png" alt="image" />	
+											<img src="/images/products/avocado-toast.jpg" alt="Vegan avocado toast" />
 										</div>
 										<div className="dz-content">
-											<h6 className="title"><Link href="/shop">SilkBliss Dress</Link></h6>
-											<h6 className="price">$60.00</h6>
+											<h6 className="title"><Link href="/shop?search=avocado">Vegan Avocado Toast</Link></h6>
+											<h6 className="price">$8.50</h6>
 										</div>
 									</div>
 								</div>
@@ -1328,14 +1093,14 @@ export default function Header() {
 				<div className="product-description">
 					<div className="widget widget_search">
 						<div className="form-group">
-							<div className="input-group">
-								<input name="dzSearch" required type="search" className="form-control" placeholder="Search Product" />
+							<form className="input-group" action="/shop" method="get">
+								<input name="search" type="search" className="form-control" placeholder="Search food and drinks" />
 								<div className="input-group-addon">
 									<button name="submit" value="Submit" type="submit" className="btn">
 										<i className="icon feather icon-search"></i>
 									</button>
 								</div>
-							</div>
+							</form>
 						</div>
 					</div>
 					<div className="widget">

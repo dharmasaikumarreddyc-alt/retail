@@ -1,8 +1,15 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import { backendUrl } from '../lib/backend';
+import { getAuthenticatedSession } from '../lib/auth';
+import {
+  formatCustomerAddress,
+  readCustomerAddresses,
+  type CustomerAddress,
+} from '../lib/customer-addresses';
 
 interface CartItem {
   merchant_id: string;
@@ -21,329 +28,319 @@ interface CartData {
   total: number;
 }
 
+interface PlacedOrder {
+  orderId: string;
+  merchantName: string;
+  total: number;
+  paymentMethod: string;
+}
+
+const emptyAddress: CustomerAddress = {
+  id: '',
+  name: '',
+  label: 'Delivery address',
+  street: '',
+  city: '',
+  state: '',
+  zipCode: '',
+  country: '',
+  phone: '',
+  isDefault: false,
+};
+
 export default function CheckoutClient() {
   const [cart, setCart] = useState<CartData | null>(null);
+  const [addresses, setAddresses] = useState<CustomerAddress[]>([]);
+  const [address, setAddress] = useState<CustomerAddress>(emptyAddress);
+  const [instructions, setInstructions] = useState('');
+  const [paymentMethod, setPaymentMethod] = useState<'upi' | 'card' | 'wallet' | 'cod'>('cod');
+  const [placedOrders, setPlacedOrders] = useState<PlacedOrder[]>([]);
   const [loading, setLoading] = useState(true);
-  const [shippingMethod, setShippingMethod] = useState<'free' | 'flat'>('free');
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState('');
   const router = useRouter();
 
   useEffect(() => {
-    fetchCart();
-  }, []);
-
-  const fetchCart = async () => {
-    try {
-      const token = localStorage.getItem('token');
-      if (!token) {
-        router.push('/login');
+    let cancelled = false;
+    const load = async () => {
+      const session = await getAuthenticatedSession('customer');
+      if (!session) {
+        router.replace('/login');
         return;
       }
-
-      const response = await fetch('http://localhost:8000/cart', {
-        headers: {
-          'Authorization': `Bearer ${token}`
+      try {
+        const savedAddresses = readCustomerAddresses();
+        const preferredAddress = savedAddresses.find((entry) => entry.isDefault) || savedAddresses[0];
+        if (!cancelled) {
+          setAddresses(savedAddresses);
+          setAddress(preferredAddress || emptyAddress);
+          setInstructions(localStorage.getItem('cartCookingInstructions') || '');
         }
-      });
 
-      if (response.ok) {
-        const data = await response.json();
-        setCart(data);
-      } else {
-        // Fallback to empty cart
-        setCart({ items: [], count: 0, subtotal: 0, total: 0 });
+        const response = await fetch(`${backendUrl}/cart`, {
+          headers: { Authorization: `Bearer ${session.token}` },
+          cache: 'no-store',
+        });
+        if (!response.ok) throw new Error('Could not load your cart. Please try again.');
+        const data: CartData = await response.json();
+        if (!cancelled) setCart(data);
+      } catch (loadError) {
+        if (!cancelled) {
+          setError(loadError instanceof Error ? loadError.message : 'Could not load checkout details.');
+          setCart({ items: [], count: 0, subtotal: 0, total: 0 });
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
       }
-    } catch (error) {
-      console.error('Error fetching cart:', error);
-      setCart({ items: [], count: 0, subtotal: 0, total: 0 });
+    };
+    void load();
+    return () => { cancelled = true; };
+  }, [router]);
+
+  const updateAddress = (field: keyof CustomerAddress, value: string) => {
+    setAddress((current) => ({ ...current, [field]: value }));
+  };
+
+  const chooseAddress = (id: string) => {
+    const selected = addresses.find((entry) => entry.id === id);
+    if (selected) setAddress(selected);
+    else setAddress(emptyAddress);
+  };
+
+  const placeOrders = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setError('');
+    if (!cart?.items.length) {
+      setError('Your cart is empty.');
+      return;
+    }
+    const requiredFields = [
+      ['name', 'Name'],
+      ['street', 'Street address'],
+      ['city', 'City'],
+      ['state', 'State'],
+      ['zipCode', 'ZIP code'],
+      ['country', 'Country'],
+      ['phone', 'Phone number'],
+    ] as const;
+    const missingField = requiredFields.find(([field]) => !address[field].trim());
+    if (missingField) {
+      setError(`Please enter your ${missingField[1]} before placing the order.`);
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      const session = await getAuthenticatedSession('customer');
+      if (!session) {
+        router.replace('/login');
+        return;
+      }
+      const deliveryAddress = formatCustomerAddress(address);
+      const groups = new Map<string, CartItem[]>();
+      for (const item of cart.items) {
+        groups.set(item.merchant_id, [...(groups.get(item.merchant_id) || []), item]);
+      }
+      const orders: PlacedOrder[] = [];
+      for (const [merchantId, items] of groups) {
+        const response = await fetch(`${backendUrl}/payments/checkout`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${session.token}`,
+          },
+          body: JSON.stringify({
+            merchantId,
+            items: items.map((item) => ({ productId: item.product_id, quantity: item.quantity })),
+            paymentMethod,
+            deliveryAddress,
+            cookingInstructions: instructions.trim(),
+          }),
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.detail || data.error || 'Could not place your order.');
+        if (!data.order?.orderId) throw new Error('The order service returned an invalid response.');
+        orders.push({
+          orderId: data.order.orderId,
+          merchantName: data.order.merchantName,
+          total: data.order.pricing.total,
+          paymentMethod: data.payment.method,
+        });
+      }
+
+      setPlacedOrders(orders);
+      localStorage.removeItem('cartCookingInstructions');
+      const clearResponse = await fetch(`${backendUrl}/cart/clear`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${session.token}` },
+      });
+      if (!clearResponse.ok) {
+        setError('Your order was placed, but the cart could not be cleared. Please refresh your cart before ordering again.');
+      }
+      window.dispatchEvent(new Event('cartUpdated'));
+    } catch (placeError) {
+      setError(placeError instanceof Error ? placeError.message : 'Could not place your order.');
     } finally {
-      setLoading(false);
+      setSubmitting(false);
     }
   };
 
-  const calculateShipping = () => {
-    if (shippingMethod === 'free') return 0;
-    return 25.75;
-  };
-
-  const calculateTotal = () => {
-    if (!cart) return 0;
-    return cart.subtotal + calculateShipping();
-  };
-
   if (loading) {
+    return <div className="text-center py-5"><div className="spinner-border text-primary" role="status" /></div>;
+  }
+
+  if (placedOrders.length > 0) {
     return (
-      <div className="content-inner-1">
-        <div className="container">
-          <div className="text-center py-5">
-            <div className="spinner-border text-primary" role="status">
-              <span className="visually-hidden">Loading...</span>
-            </div>
+      <div className="container py-5">
+        <div className="card card-body">
+          <h2 className="text-success">Order placed!</h2>
+          <p>Your order is confirmed.</p>
+          {error && <div className="alert alert-warning">{error}</div>}
+          {placedOrders.map((order) => (
+            <section key={order.orderId} className="border rounded p-3 mb-3">
+              <h5 className="mb-1">{order.merchantName}</h5>
+              <p className="text-muted mb-2">
+                Order #{order.orderId} · ${order.total.toFixed(2)} · Mode of payment: {order.paymentMethod.toUpperCase()}
+              </p>
+              <Link href={`/account/orders/${order.orderId}`} className="btn btn-outline-primary">
+                View order, rate & review
+              </Link>
+            </section>
+          ))}
+          <div className="d-flex gap-2 flex-wrap">
+            <Link href="/account/orders" className="btn btn-primary">View your orders</Link>
+            <Link href="/shop" className="btn btn-outline-secondary">Continue shopping</Link>
           </div>
         </div>
       </div>
     );
   }
 
-  if (!cart || cart.items.length === 0) {
+  if (!cart?.items.length) {
     return (
-      <div className="content-inner-1">
-        <div className="container">
-          <div className="text-center py-5">
-            <h4>Your cart is empty</h4>
-            <p className="text-muted mb-4">Add some items to your cart before checking out</p>
-            <Link href="/shop" className="btn btn-secondary">
-              Continue Shopping
-            </Link>
-          </div>
-        </div>
+      <div className="container py-5 text-center">
+        <h4>Your cart is empty</h4>
+        <p className="text-muted">Add some items before checking out.</p>
+        <Link href="/shop" className="btn btn-secondary">Continue Shopping</Link>
       </div>
     );
   }
 
   return (
-    <div className="content-inner-1">
-      <div className="container">
-        <div className="row shop-checkout">
-          <div className="col-xl-8">
-            <h4 className="title m-b15">Billing details</h4>
-            <div className="accordion dz-accordion accordion-sm" id="accordionFaq">
-              <div className="accordion-item">
-                <h2 className="accordion-header" id="headingOne">
-                  <a href="#" className="accordion-button collapsed" data-bs-toggle="collapse" data-bs-target="#collapseOne" aria-expanded="true" aria-controls="collapseOne">
-                    Returning customer? Click here to login
-                    <span className="toggle-close"></span>
-                  </a>
-                </h2>
-                <div id="collapseOne" className="accordion-collapse collapse" aria-labelledby="headingOne" data-bs-parent="#accordionFaq">
-                  <div className="accordion-body">
-                    <p className="m-b0">If your order has not yet shipped, you can contact us to change your shipping address</p>
-                  </div>
-                </div>
+    <div className="container py-4">
+      <form className="row g-4" onSubmit={placeOrders}>
+        <div className="col-xl-7">
+          <section className="card card-body mb-4">
+            <h4 className="mb-3">Delivery address</h4>
+            {addresses.length > 0 && (
+              <div className="mb-3">
+                <label className="form-label" htmlFor="saved-address">Use a saved address</label>
+                <select
+                  id="saved-address"
+                  className="form-select"
+                  value={addresses.some((entry) => entry.id === address.id) ? address.id : ''}
+                  onChange={(event) => chooseAddress(event.target.value)}
+                >
+                  <option value="">Enter a different address</option>
+                  {addresses.map((entry) => (
+                    <option key={entry.id} value={entry.id}>
+                      {entry.label}: {[entry.street, entry.city].filter(Boolean).join(', ')}
+                    </option>
+                  ))}
+                </select>
               </div>
-              <div className="accordion-item">
-                <h2 className="accordion-header" id="headingTwo">
-                  <a href="#" className="accordion-button collapsed" data-bs-toggle="collapse" data-bs-target="#collapseTwo" aria-expanded="true" aria-controls="collapseOne">
-                    Have a coupon? Click here to enter your code
-                    <span className="toggle-close"></span>
-                  </a>
-                </h2>
-                <div id="collapseTwo" className="accordion-collapse collapse" aria-labelledby="headingTwo" data-bs-parent="#accordionFaq">
-                  <div className="accordion-body">
-                    <p className="m-b0">If your order has not yet shipped, you can contact us to change your shipping address</p>
-                  </div>
-                </div>
-              </div>
-            </div>
-            <form className="row">
-              <div className="col-md-6">
-                <div className="form-group m-b25">
-                  <label className="label-title">First Name</label>
-                  <input name="dzName" required className="form-control" />
-                </div>
-              </div>
-              <div className="col-md-6">
-                <div className="form-group m-b25">
-                  <label className="label-title">Last Name</label>
-                  <input name="dzName" required className="form-control" />
-                </div>
-              </div>
-              <div className="col-md-12">
-                <div className="form-group m-b25">
-                  <label className="label-title">Company name (optional)</label>
-                  <input name="dzName" className="form-control" />
-                </div>
-              </div>
-              <div className="col-md-12">
-                <div className="m-b25">
-                  <label className="label-title">Country / Region *</label>
-                  <select className="default-select form-select w-100">
-                    <option>India</option>
-                    <option value="1">USA</option>
-                    <option value="2">UK</option>
-                    <option value="3">Australia</option>
-                  </select>
-                </div>
-              </div>
-              <div className="col-md-12">
-                <div className="form-group m-b25">
-                  <label className="label-title">Street address *</label>
-                  <input name="dzName" required className="form-control m-b15" placeholder="House number and street name" />
-                  <input name="dzName" required className="form-control" placeholder="Apartment, suite, unit, etc. (optional)" />
-                </div>
-              </div>
-              <div className="col-md-12">
-                <div className="form-group m-b25">
-                  <label className="label-title">Town / City *</label>
-                  <input name="dzName" required className="form-control" />
-                </div>
-              </div>
-              <div className="col-md-6">
-                <div className="m-b25">
-                  <label className="label-title">State *</label>
-                  <select className="default-select form-select w-100">
-                    <option>Telangana</option>
-                    <option value="1">Karnataka</option>
-                    <option value="2">Maharashtra</option>
-                    <option value="3">Tamil Nadu</option>
-                  </select>
-                </div>
-              </div>
-              <div className="col-md-6">
-                <div className="form-group m-b25">
-                  <label className="label-title">Postcode / ZIP *</label>
-                  <input name="dzName" required className="form-control" />
-                </div>
-              </div>
-              <div className="col-md-6">
-                <div className="form-group m-b25">
-                  <label className="label-title">Phone *</label>
-                  <input name="dzName" required className="form-control" />
-                </div>
-              </div>
-              <div className="col-md-6">
-                <div className="form-group m-b25">
-                  <label className="label-title">Email address *</label>
-                  <input name="dzName" required className="form-control" />
-                </div>
-              </div>
-              <div className="col-md-12">
-                <div className="form-group">
-                  <div className="custom-control custom-checkbox">
-                    <input type="checkbox" className="form-check-input" id="basic_checkbox_1" />
-                    <label className="form-check-label" htmlFor="basic_checkbox_1">Create an account? </label>
-                  </div>
-                </div>
-                <div className="form-group">
-                  <div className="custom-control custom-checkbox">
-                    <input type="checkbox" className="form-check-input" id="basic_checkbox_2" />
-                    <label className="form-check-label" htmlFor="basic_checkbox_2">Ship to a different address?</label>
-                  </div>
-                </div>
-              </div>
-              <div className="col-md-12 m-b25">
-                <div className="form-group">
-                  <label className="label-title">Order notes (optional)</label>
-                  <textarea id="comments" placeholder="Notes about your order, e.g. special notes for delivery." className="form-control" name="comment" cols={90} rows={5}></textarea>
-                </div>
-              </div>
-            </form>
-          </div>
-          <div className="col-xl-4 side-bar">
-            <h4 className="title m-b15">Your Order</h4>
-            <div className="order-detail sticky-top">
-              {cart.items.map((item, index) => (
-                <div key={`${item.product_id}-${index}`} className={`cart-item style-1 ${index === cart.items.length - 1 ? 'mb-0' : ''}`}>
-                  <div className="dz-media">
-                    <img src={item.image || '/images/shop/shop-cart/pic1.jpg'} alt={item.name} />
-                  </div>
-                  <div className="dz-content">
-                    <h6 className="title mb-0">{item.name}</h6>
-                    <span className="price">${item.price.toFixed(2)} × {item.quantity}</span>
-                  </div>
+            )}
+            <div className="row g-3">
+              {([
+                ['name', 'Full name'],
+                ['phone', 'Phone number'],
+                ['street', 'House number and street'],
+                ['city', 'City'],
+                ['state', 'State'],
+                ['zipCode', 'ZIP / postcode'],
+                ['country', 'Country'],
+              ] as const).map(([field, label]) => (
+                <div className={field === 'street' ? 'col-12' : 'col-md-6'} key={field}>
+                  <label className="form-label" htmlFor={`delivery-${field}`}>{label} *</label>
+                  <input
+                    id={`delivery-${field}`}
+                    className="form-control"
+                    value={address[field]}
+                    onChange={(event) => updateAddress(field, event.target.value)}
+                    required
+                    maxLength={field === 'street' ? 300 : 100}
+                  />
                 </div>
               ))}
-              <table>
-                <tbody>
-                  <tr className="subtotal">
-                    <td>Subtotal</td>
-                    <td className="price">${cart.subtotal.toFixed(2)}</td>
-                  </tr>
-                  <tr className="title">
-                    <td><h6 className="title font-weight-500">Shipping</h6></td>
-                    <td></td>
-                  </tr>
-                  <tr className="shipping">
-                    <td>
-                      <div className="custom-control custom-checkbox">
-                        <input
-                          className="form-check-input radio"
-                          type="radio"
-                          name="shippingMethod"
-                          id="flexRadioDefault1"
-                          checked={shippingMethod === 'free'}
-                          onChange={() => setShippingMethod('free')}
-                        />
-                        <label className="form-check-label" htmlFor="flexRadioDefault1">
-                          Free shipping
-                        </label>
-                      </div>
-                      <div className="custom-control custom-checkbox">
-                        <input
-                          className="form-check-input radio"
-                          type="radio"
-                          name="shippingMethod"
-                          id="flexRadioDefault2"
-                          checked={shippingMethod === 'flat'}
-                          onChange={() => setShippingMethod('flat')}
-                        />
-                        <label className="form-check-label" htmlFor="flexRadioDefault2">
-                          Flat Rate:
-                        </label>
-                      </div>
-                    </td>
-                    <td className="price">${calculateShipping().toFixed(2)}</td>
-                  </tr>
-                  <tr className="total">
-                    <td>Total</td>
-                    <td className="price">${calculateTotal().toFixed(2)}</td>
-                  </tr>
-                </tbody>
-              </table>
-
-              <div className="accordion dz-accordion accordion-sm" id="accordionFaq1">
-                <div className="accordion-item">
-                  <div className="accordion-header" id="heading1">
-                    <div className="accordion-button collapsed custom-control custom-checkbox border-0" data-bs-toggle="collapse" data-bs-target="#collapse1" role="navigation" aria-expanded="true" aria-controls="collapse1">
-                      <input className="form-check-input radio" type="radio" name="paymentMethod" id="flexRadioDefault3" defaultChecked />
-                      <label className="form-check-label" htmlFor="flexRadioDefault3">
-                        Direct bank transfer
-                      </label>
-                    </div>
-                  </div>
-                  <div id="collapse1" className="accordion-collapse collapse show" aria-labelledby="heading1" data-bs-parent="#accordionFaq1">
-                    <div className="accordion-body">
-                      <p className="m-b0">Make your payment directly into our bank account. Please use your Order ID as the payment reference. Your order will not be shipped until the funds have cleared in our account.</p>
-                    </div>
-                  </div>
-                </div>
-                <div className="accordion-item">
-                  <div className="accordion-header" id="heading2">
-                    <div className="accordion-button collapsed custom-control custom-checkbox border-0" data-bs-toggle="collapse" data-bs-target="#collapse2" role="navigation" aria-expanded="true" aria-controls="collapse2">
-                      <input className="form-check-input radio" type="radio" name="paymentMethod" id="flexRadioDefault5" />
-                      <label className="form-check-label" htmlFor="flexRadioDefault5">
-                        Cash on delivery
-                      </label>
-                    </div>
-                  </div>
-                  <div id="collapse2" className="accordion-collapse collapse" aria-labelledby="collapse2" data-bs-parent="#accordionFaq1">
-                    <div className="accordion-body">
-                      <p className="m-b0">Pay with cash upon delivery.</p>
-                    </div>
-                  </div>
-                </div>
-                <div className="accordion-item">
-                  <div className="accordion-header" id="heading3">
-                    <div className="accordion-button collapsed custom-control custom-checkbox border-0" data-bs-toggle="collapse" data-bs-target="#collapse3" role="navigation" aria-expanded="true" aria-controls="collapse3">
-                      <input className="form-check-input radio" type="radio" name="paymentMethod" id="flexRadioDefault4" />
-                      <label className="form-check-label" htmlFor="flexRadioDefault4">
-                        PayPal / UPI
-                      </label>
-                    </div>
-                  </div>
-                  <div id="collapse3" className="accordion-collapse collapse" aria-labelledby="heading3" data-bs-parent="#accordionFaq1">
-                    <div className="accordion-body">
-                      <p className="m-b0">Pay via UPI or PayPal; you can pay with your credit card if you don't have a PayPal account.</p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-              <div className="form-group">
-                <button type="button" className="btn btn-secondary btnhover w-100">PLACE ORDER</button>
-              </div>
             </div>
-          </div>
+          </section>
+
+          <section className="card card-body mb-4">
+            <h4 className="mb-2">Cooking instructions</h4>
+            <p className="text-muted">Optional notes for the restaurant, such as spice level or allergies.</p>
+            <textarea
+              className="form-control"
+              rows={3}
+              maxLength={1000}
+              value={instructions}
+              onChange={(event) => {
+                setInstructions(event.target.value);
+                localStorage.setItem('cartCookingInstructions', event.target.value);
+              }}
+              placeholder="Add cooking instructions (optional)"
+            />
+          </section>
+
+          <section className="card card-body">
+            <h4 className="mb-3">Payment preference</h4>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 10 }}>
+              {([
+                ['cod', 'Cash on delivery'],
+                ['upi', 'UPI'],
+                ['card', 'Card'],
+                ['wallet', 'Wallet'],
+              ] as const).map(([method, label]) => (
+                <div key={method} style={{ minWidth: 0 }}>
+                  <label
+                    className={`d-flex align-items-center gap-2 border rounded p-2 h-100 ${paymentMethod === method ? 'border-primary bg-light' : ''}`}
+                    style={{ cursor: 'pointer', minWidth: 0, overflowWrap: 'normal' }}
+                  >
+                    <input
+                      className="form-check-input m-0 flex-shrink-0"
+                      type="radio"
+                      name="paymentMethod"
+                      value={method}
+                      checked={paymentMethod === method}
+                      onChange={() => setPaymentMethod(method)}
+                    />
+                    <span className="lh-sm" style={{ overflowWrap: 'normal', wordBreak: 'normal' }}>{label}</span>
+                  </label>
+                </div>
+              ))}
+            </div>
+          </section>
         </div>
-      </div>
+
+        <aside className="col-xl-5">
+          <section className="card card-body">
+            <h4 className="mb-3">Your order</h4>
+            {cart.items.map((item) => (
+              <div className="d-flex justify-content-between gap-3 py-2 border-bottom" key={`${item.merchant_id}-${item.product_id}`}>
+                <span>{item.quantity} × {item.name}<small className="d-block text-muted">{item.merchant_name}</small></span>
+                <strong>${(item.price * item.quantity).toFixed(2)}</strong>
+              </div>
+            ))}
+            <div className="d-flex justify-content-between mt-3">
+              <strong>Cart subtotal</strong><strong>${cart.subtotal.toFixed(2)}</strong>
+            </div>
+            <p className="small text-muted mt-2">Final fees and totals are calculated by the order service.</p>
+            {error && <div className="alert alert-danger py-2" role="alert">{error}</div>}
+            <button type="submit" className="btn btn-secondary w-100 mt-2" disabled={submitting}>
+              {submitting ? 'Placing order…' : 'PLACE ORDER'}
+            </button>
+          </section>
+        </aside>
+      </form>
     </div>
   );
 }
