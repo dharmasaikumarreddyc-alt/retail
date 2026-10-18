@@ -1,0 +1,106 @@
+name: Validate Auth Fixes
+
+on:
+  push:
+    branches:
+      - fix/auth-ux-validation
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Verify broken forgot-password link is gone
+        run: |
+          if grep -R -n 'href="/forgot-password"' app/login; then
+            echo 'Broken forgot-password link still exists'
+            exit 1
+          fi
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install backend dependencies
+        run: pip install -r backend/requirements.txt
+
+      - name: Validate password schema and auth lifecycle
+        working-directory: backend
+        env:
+          ENVIRONMENT: test
+          DATABASE_URL: sqlite+aiosqlite:///./auth-validation.db
+          SECRET_KEY: auth-validation-secret-key-that-is-long-enough
+        run: |
+          python - <<'PY'
+          import asyncio
+          from fastapi import HTTPException
+          from pydantic import ValidationError
+
+          from database import init_db, async_session
+          from models.user import UserCreate
+          from services.auth_service import AuthService
+
+          try:
+              UserCreate(email='short@example.com', name='Short', password='1234567')
+          except ValidationError:
+              pass
+          else:
+              raise AssertionError('Passwords shorter than 8 characters must be rejected')
+
+          UserCreate(email='valid@example.com', name='Valid', password='12345678')
+
+          async def main():
+              await init_db()
+              async with async_session() as db:
+                  user = await AuthService.create_user(
+                      db,
+                      email='Customer@Example.com ',
+                      name='Customer',
+                      password='StrongPass123',
+                  )
+                  assert user.email == 'customer@example.com'
+
+                  authenticated = await AuthService.authenticate_user(
+                      db, 'CUSTOMER@example.com', 'StrongPass123'
+                  )
+                  assert authenticated is not None
+                  assert authenticated.id == user.id
+
+                  wrong_password = await AuthService.authenticate_user(
+                      db, 'customer@example.com', 'wrong-password'
+                  )
+                  assert wrong_password is None
+
+                  token = AuthService.create_access_token({'sub': user.id})
+                  assert AuthService.decode_token(token) == user.id
+
+                  try:
+                      await AuthService.create_user(
+                          db,
+                          email='customer@example.com',
+                          name='Duplicate',
+                          password='StrongPass456',
+                      )
+                  except HTTPException as exc:
+                      assert exc.status_code == 400
+                  else:
+                      raise AssertionError('Duplicate email must be rejected')
+
+          asyncio.run(main())
+          print('Auth validation passed')
+          PY
