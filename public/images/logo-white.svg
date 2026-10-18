@@ -1,8 +1,5 @@
-<svg width="290" height="46" viewBox="0 0 290 46" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <!-- Original Yellow Icon Emblem -->
+<svg width="210" height="46" viewBox="0 0 210 46" fill="none" xmlns="http://www.w3.org/2000/svg">
   <path d="M7.3894 45.1718C3.58441 45.1718 0.5 42.0874 0.5 38.2824C0.5 34.1504 3.84966 30.8008 7.98167 30.8008H14.2788V38.2824C14.2793 42.087 11.1944 45.1718 7.3894 45.1718Z" fill="#FBBB00"/>
   <path d="M36.5 15.9059C36.5 22.5621 32.7175 28.2981 25.288 30.1568C23.6357 30.5757 21.8062 30.8003 19.8 30.8003H14.3418V16.6375H14.3006C14.3006 16.6375 14.2948 16.6375 14.2886 16.6375C13.84 16.5843 13.3856 16.5609 12.9255 16.5609C6.46366 16.5609 1.1586 21.4944 0.5625 27.7906V7.16978C0.5625 3.66739 3.40176 0.828613 6.90415 0.828613H19.8005C30.8463 0.828613 36.5 7.03045 36.5 15.9059Z" fill="#FBBB00"/>
-  
-  <!-- New AI Mavericks Text -->
-  <text x="48" y="35.5" fill="white" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="30px" font-weight="800" letter-spacing="-0.03em">AI Mavericks</text>
+  <text x="48" y="35.5" fill="white" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="30px" font-weight="800" letter-spacing="-0.03em">Loopora</text>
 </svg>
