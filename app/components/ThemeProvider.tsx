@@ -7,12 +7,12 @@ import { useEffect, useState } from 'react';
 // and persists the choice in localStorage. The initial value is applied by an
 // inline script in layout.tsx to avoid a flash of the wrong theme.
 
-type ThemeId = 'daylight' | 'ocean' | 'meadow' | 'lavender' | 'midnight' | 'forest';
+type ThemeId = 'daylight' | 'ocean' | 'meadow' | 'lavender' | 'midnight';
 
 interface ThemeDef {
   id: ThemeId;
   name: string;
-  swatch: string; // gradient used in the picker
+  swatch: string;
   dark: boolean;
 }
 
@@ -22,7 +22,6 @@ const THEMES: ThemeDef[] = [
   { id: 'meadow', name: 'Meadow', swatch: 'linear-gradient(135deg,#16a34a 50%,#e2f6e9 50%)', dark: false },
   { id: 'lavender', name: 'Lavender', swatch: 'linear-gradient(135deg,#7c5cfc 50%,#ece6ff 50%)', dark: false },
   { id: 'midnight', name: 'Midnight', swatch: 'linear-gradient(135deg,#fb7185 50%,#0f172a 50%)', dark: true },
-  { id: 'forest', name: 'Forest', swatch: 'linear-gradient(135deg,#34d399 50%,#0c1b14 50%)', dark: true },
 ];
 
 export const STORAGE_KEY = 'app-theme';
@@ -38,7 +37,9 @@ export default function ThemeProvider() {
   const [open, setOpen] = useState(false);
 
   useEffect(() => {
-    const saved = (localStorage.getItem(STORAGE_KEY) as ThemeId) || 'daylight';
+    const rawSaved = localStorage.getItem(STORAGE_KEY);
+    const saved = THEMES.some((t) => t.id === rawSaved) ? (rawSaved as ThemeId) : 'daylight';
+    if (rawSaved && rawSaved !== saved) localStorage.setItem(STORAGE_KEY, saved);
     setTheme(saved);
     applyTheme(saved);
   }, []);
