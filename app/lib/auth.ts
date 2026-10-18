@@ -18,15 +18,34 @@ const tokenKeys: Record<AccountRole, string> = {
   merchant: 'merchantToken',
 };
 
+type BrowserStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
+
+function tokenSource(key: string): { token: string; storage: BrowserStorage } | null {
+  const persistent = localStorage.getItem(key);
+  if (persistent) return { token: persistent, storage: localStorage };
+
+  const session = sessionStorage.getItem(key);
+  if (session) return { token: session, storage: sessionStorage };
+
+  return null;
+}
+
+function removeMatchingToken(key: string, token: string): void {
+  if (localStorage.getItem(key) === token) localStorage.removeItem(key);
+  if (sessionStorage.getItem(key) === token) sessionStorage.removeItem(key);
+}
+
 export async function getAuthenticatedSession(role: AccountRole): Promise<AuthenticatedSession | null> {
   if (typeof window === 'undefined') return null;
 
   const otherRole: AccountRole = role === 'customer' ? 'merchant' : 'customer';
-  const storedToken =
-    localStorage.getItem(tokenKeys[role]) ||
-    localStorage.getItem(tokenKeys[otherRole]) ||
-    localStorage.getItem('token');
-  if (!storedToken) return null;
+  const source =
+    tokenSource(tokenKeys[role]) ||
+    tokenSource(tokenKeys[otherRole]) ||
+    tokenSource('token');
+  if (!source) return null;
+
+  const { token: storedToken, storage: sourceStorage } = source;
 
   try {
     const response = await fetch(`${backendUrl}/auth/me`, {
@@ -35,9 +54,9 @@ export async function getAuthenticatedSession(role: AccountRole): Promise<Authen
     });
     if (!response.ok) {
       for (const key of Object.values(tokenKeys)) {
-        if (localStorage.getItem(key) === storedToken) localStorage.removeItem(key);
+        removeMatchingToken(key, storedToken);
       }
-      if (localStorage.getItem('token') === storedToken) localStorage.removeItem('token');
+      removeMatchingToken('token', storedToken);
       return null;
     }
 
@@ -45,14 +64,17 @@ export async function getAuthenticatedSession(role: AccountRole): Promise<Authen
     if (profile.role !== 'customer' && profile.role !== 'merchant') return null;
 
     const actualKey = tokenKeys[profile.role];
-    const currentActualToken = localStorage.getItem(actualKey);
-    if (!currentActualToken || currentActualToken === storedToken) {
-      localStorage.setItem(actualKey, storedToken);
+    const actualSource = tokenSource(actualKey);
+    if (!actualSource || actualSource.token === storedToken) {
+      removeMatchingToken(actualKey, storedToken);
+      sourceStorage.setItem(actualKey, storedToken);
     }
-    if (profile.role !== role && localStorage.getItem(tokenKeys[role]) === storedToken) {
-      localStorage.removeItem(tokenKeys[role]);
+
+    if (profile.role !== role) {
+      removeMatchingToken(tokenKeys[role], storedToken);
     }
-    if (localStorage.getItem('token') === storedToken) localStorage.removeItem('token');
+    removeMatchingToken('token', storedToken);
+
     if (profile.role !== role) return null;
 
     return { token: storedToken, profile };
@@ -61,11 +83,18 @@ export async function getAuthenticatedSession(role: AccountRole): Promise<Authen
   }
 }
 
-export function saveAuthenticatedToken(role: AccountRole, token: string): void {
-  localStorage.setItem(tokenKeys[role], token);
+export function saveAuthenticatedToken(role: AccountRole, token: string, persist = true): void {
+  localStorage.removeItem(tokenKeys[role]);
+  sessionStorage.removeItem(tokenKeys[role]);
+
+  const storage = persist ? localStorage : sessionStorage;
+  storage.setItem(tokenKeys[role], token);
+
   localStorage.removeItem('token');
+  sessionStorage.removeItem('token');
 }
 
 export function clearAuthenticatedToken(role: AccountRole): void {
   localStorage.removeItem(tokenKeys[role]);
+  sessionStorage.removeItem(tokenKeys[role]);
 }
