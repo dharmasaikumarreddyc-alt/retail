@@ -8,7 +8,7 @@ import https from 'node:https';
 
 const DEFAULT_PHONE = process.env.BLAND_DEMO_PHONE || '+918499077262';
 const DEFAULT_TASK =
-  'You are the AI Mavericks agentic checkout assistant. Greet the caller, ' +
+  'You are the Loopora agentic checkout assistant. Greet the caller, ' +
   'briefly explain that you can order food, groceries and gifts on their behalf ' +
   'across multiple merchants, ask what they would like to try, and take a simple ' +
   'demo order. Keep the whole call under two minutes and end warmly.';
