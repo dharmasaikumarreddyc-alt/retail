@@ -26,7 +26,7 @@ export default function MerchantSelectorClient() {
     <main className="merchant-dash-root merchant-portal-root">
       <header className="merchant-portal-topbar">
         <Link className="merchant-brand" href="/merchant">
-          <img className="merchant-brand-logo" src="/images/logo.svg" alt="AI Mavericks" />
+          <img className="merchant-brand-logo" src="/images/logo.svg" alt="Loopora" />
         </Link>
         <Link className="merchant-login-customer-link" href="/login">Customer sign in <i className="fas fa-arrow-up-right-from-square" /></Link>
       </header>
@@ -44,7 +44,7 @@ export default function MerchantSelectorClient() {
         </Link>
         <p className="merchant-portal-separate">Private merchant access · Customer accounts cannot open this dashboard</p>
       </div>
-      <footer className="merchant-login-footer"><span>© Aisle Merchant Workspace</span><Link href="/login">Customer sign in <i className="fas fa-arrow-right" /></Link></footer>
+      <footer className="merchant-login-footer"><span>© Loopora Merchant Workspace</span><Link href="/login">Customer sign in <i className="fas fa-arrow-right" /></Link></footer>
     </main>
   );
 }
