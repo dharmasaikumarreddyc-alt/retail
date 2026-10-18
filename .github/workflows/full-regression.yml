@@ -1,0 +1,115 @@
+name: Full regression
+
+on:
+  push:
+    branches:
+      - test/full-regression
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  ENVIRONMENT: development
+  DEBUG: "false"
+  SECRET_KEY: regression-only-secret-key-1234567890-abcdef
+  DATABASE_URL: sqlite+aiosqlite:///./regression.db
+  CORS_ORIGINS: '["http://127.0.0.1:3000","http://localhost:3000"]'
+  DEMO_MERCHANT_EMAIL: merchant.regression@example.com
+  DEMO_MERCHANT_PASSWORD: MerchantPass123!
+  NEXT_PUBLIC_BACKEND_URL: http://127.0.0.1:8000
+  BACKEND_URL: http://127.0.0.1:8000
+  FRONTEND_URL: http://127.0.0.1:3000
+
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Install backend dependencies
+        run: python -m pip install -r backend/requirements.txt
+
+      - name: Compile Python backend
+        run: python -m compileall -q backend
+
+      - name: Lint frontend
+        id: lint
+        continue-on-error: true
+        run: npm run lint
+
+      - name: Build production frontend
+        run: npm run build
+
+      - name: Install browser test runtime
+        run: |
+          npm install --no-save --package-lock=false playwright@1.55.0
+          npx playwright install --with-deps chromium
+
+      - name: Initialize fresh database and seed merchant
+        run: |
+          rm -f backend/regression.db
+          cd backend
+          python -c 'import asyncio; from database import init_db; asyncio.run(init_db())'
+          python seed_merchant_demo.py
+
+      - name: Start FastAPI backend
+        run: |
+          cd backend
+          nohup python -m uvicorn main:app --host 127.0.0.1 --port 8000 > ../backend-regression.log 2>&1 &
+          echo $! > ../backend-regression.pid
+          cd ..
+          for i in {1..60}; do
+            if curl -fsS http://127.0.0.1:8000/health >/dev/null; then exit 0; fi
+            sleep 1
+          done
+          cat backend-regression.log
+          exit 1
+
+      - name: Start Next.js frontend
+        run: |
+          nohup npm start -- -H 127.0.0.1 -p 3000 > frontend-regression.log 2>&1 &
+          echo $! > frontend-regression.pid
+          for i in {1..60}; do
+            if curl -fsS http://127.0.0.1:3000/ >/dev/null; then exit 0; fi
+            sleep 1
+          done
+          cat frontend-regression.log
+          exit 1
+
+      - name: Backend integration regression
+        run: python tests/regression_backend.py
+
+      - name: Frontend UI and Next API regression
+        run: node tests/regression_frontend.mjs
+
+      - name: Print server logs
+        if: always()
+        run: |
+          echo '===== BACKEND LOG ====='
+          tail -n 300 backend-regression.log || true
+          echo '===== FRONTEND LOG ====='
+          tail -n 300 frontend-regression.log || true
+
+      - name: Enforce lint result
+        if: always()
+        run: |
+          if [ "${{ steps.lint.outcome }}" != "success" ]; then
+            echo "Frontend lint failed."
+            exit 1
+          fi
