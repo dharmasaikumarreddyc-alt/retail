@@ -412,32 +412,6 @@ export default function CartPilotClient() {
   const [assistantActive, setAssistantActive] = useState(false); // continuous mode on/off
   const assistantActiveRef = useRef(false);
 
-  // Bland.ai demo call
-  const [callStatus, setCallStatus] = useState<'idle' | 'calling' | 'ok' | 'error'>('idle');
-  const [callMessage, setCallMessage] = useState<string>('');
-  async function triggerDemoCall() {
-    setCallStatus('calling');
-    setCallMessage('Placing a call to +91 84990 77262…');
-    try {
-      const res = await fetch('/api/agents/call', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({}),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (res.ok && data?.ok) {
-        setCallStatus('ok');
-        setCallMessage('Call queued — your phone should ring in a few seconds.');
-      } else {
-        setCallStatus('error');
-        setCallMessage(data?.error || `Call failed (HTTP ${res.status})`);
-      }
-    } catch (err) {
-      setCallStatus('error');
-      setCallMessage((err as Error).message || 'Network error');
-    }
-  }
-
   // Geolocation / radius
   const [maxDistance, setMaxDistance] = useState(5);
   const [located, setLocated] = useState(false);
@@ -1905,36 +1879,6 @@ export default function CartPilotClient() {
                           Voice isn’t available in this browser. Use Chrome or Edge for the voice assistant — or just type your request below.
                         </div>
                       )}
-
-                      {/* Bland.ai demo call — rings the demo number so a live customer can experience the agent by phone. */}
-                      <div className="text-center mb-4">
-                        <button
-                          type="button"
-                          className="btn btn-outline-primary rounded-pill px-4"
-                          onClick={triggerDemoCall}
-                          disabled={callStatus === 'calling'}
-                        >
-                          <i className={`fas ${callStatus === 'calling' ? 'fa-spinner fa-spin' : 'fa-phone-volume'} me-2`}></i>
-                          {callStatus === 'calling' ? 'Placing call…' : 'Get a Demo Call'}
-                        </button>
-                        <div className="small text-muted mt-2">
-                          Rings <strong>+91 84990&nbsp;77262</strong> for a live phone demo of the agent.
-                        </div>
-                        {callMessage && (
-                          <div
-                            className={`alert mt-3 mb-0 small ${
-                              callStatus === 'ok'
-                                ? 'alert-success'
-                                : callStatus === 'error'
-                                ? 'alert-warning'
-                                : 'alert-info'
-                            }`}
-                            role="alert"
-                          >
-                            {callMessage}
-                          </div>
-                        )}
-                      </div>
 
                       {/* Voice diagnostics — isolates TTS vs mic vs browser */}
                       <details className="bg-light rounded p-3 mb-4 small">
