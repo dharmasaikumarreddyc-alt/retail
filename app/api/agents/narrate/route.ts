@@ -28,7 +28,7 @@ function textStream(lines: string[]): Response {
 export async function POST(request: NextRequest) {
   const { query } = await request.json().catch(() => ({ query: '' }));
 
-  const req = buildChatRequest();
+  const req = await buildChatRequest();
   if (!req) {
     return textStream([
       'Understanding your request...',
@@ -82,7 +82,6 @@ export async function POST(request: NextRequest) {
             if (!trimmed.startsWith('data:')) continue;
             const payload = trimmed.slice(5).trim();
             if (payload === '[DONE]') {
-              controller.close();
               return;
             }
             try {
