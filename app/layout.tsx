@@ -6,8 +6,8 @@ import ThemeProvider from "./components/ThemeProvider";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Pixio: Shop & eCommerce",
-  description: "Elevate your online retail presence with Pixio Shop & eCommerce Template. Crafted with precision, this responsive and feature-rich template provides a seamless and visually stunning shopping experience.",
+  title: "Loopora",
+  description: "Loopora makes shopping across merchants simple, personalized, and intelligent.",
   icons: {
     icon: "/images/favicon.png",
   },
@@ -21,12 +21,10 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
-        {/* Apply saved theme before paint to avoid a flash of the wrong theme */}
         <Script id="theme-init" strategy="beforeInteractive">
-          {`(function(){try{var t=localStorage.getItem('app-theme')||'daylight';var dark=(t==='midnight'||t==='forest');document.documentElement.setAttribute('data-theme',t);document.documentElement.setAttribute('data-bs-theme',dark?'dark':'light');}catch(e){}})();`}
+          {`(function(){try{var allowed=['daylight','ocean','meadow','lavender','midnight'];var t=localStorage.getItem('app-theme')||'daylight';if(!allowed.includes(t)){t='daylight';localStorage.setItem('app-theme',t);}var dark=(t==='midnight');document.documentElement.setAttribute('data-theme',t);document.documentElement.setAttribute('data-bs-theme',dark?'dark':'light');}catch(e){}})();`}
         </Script>
 
-        {/* STYLESHEETS */}
         <link rel="stylesheet" href="/vendor/magnific-popup/magnific-popup.min.css" />
         <link rel="stylesheet" href="/vendor/bootstrap-select/dist/css/bootstrap-select.min.css" />
         <link rel="stylesheet" href="/vendor/swiper/swiper-bundle.min.css" />
@@ -38,7 +36,6 @@ export default function RootLayout({
         <link rel="stylesheet" href="/css/style.css" />
         <link rel="stylesheet" href="/css/skin/skin-1.css" />
 
-        {/* GOOGLE FONTS */}
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
         <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&family=Roboto:wght@100;300;400;500;700;900&display=swap" rel="stylesheet" />
@@ -49,7 +46,6 @@ export default function RootLayout({
         <ThemeProvider />
         {children}
 
-        {/* JAVASCRIPT FILES */}
         <Script src="/js/jquery.min.js" strategy="beforeInteractive" />
         <Script src="/vendor/bootstrap/dist/js/bootstrap.bundle.min.js" strategy="beforeInteractive" />
         <Script src="/vendor/bootstrap-select/dist/js/bootstrap-select.min.js" strategy="beforeInteractive" />
@@ -71,47 +67,14 @@ export default function RootLayout({
         <Script src="/js/dz.ajax.js" strategy="lazyOnload" />
         <Script src="/js/custom.min.js" strategy="lazyOnload" />
 
-        {/* Update support button link */}
-        <Script id="update-support-link" strategy="lazyOnload">
+        <Script id="remove-template-promos" strategy="lazyOnload">
           {`
-            // Wait for support button to be added by template JS
-            const updateSupportLink = () => {
-              const supportBtn = document.querySelector('.DZ-bt-support-now');
-              if (supportBtn) {
-                supportBtn.href = 'https://google.com';
-                supportBtn.target = '_blank';
-              } else {
-                // Try again if button not found yet
-                setTimeout(updateSupportLink, 500);
-              }
+            const removeTemplatePromos = () => {
+              document.querySelectorAll('.DZ-bt-support-now, .DZ-bt-buy-now').forEach((el) => el.remove());
             };
-
-            if (document.readyState === 'loading') {
-              document.addEventListener('DOMContentLoaded', updateSupportLink);
-            } else {
-              updateSupportLink();
-            }
-          `}
-        </Script>
-
-        {/* Remove buy now button */}
-        <Script id="remove-buy-now" strategy="lazyOnload">
-          {`
-            const removeBuyNowButton = () => {
-              const buyNowBtn = document.querySelector('.DZ-bt-buy-now');
-              if (buyNowBtn) {
-                buyNowBtn.remove();
-              } else {
-                // Try again if button not found yet
-                setTimeout(removeBuyNowButton, 500);
-              }
-            };
-
-            if (document.readyState === 'loading') {
-              document.addEventListener('DOMContentLoaded', removeBuyNowButton);
-            } else {
-              removeBuyNowButton();
-            }
+            removeTemplatePromos();
+            setTimeout(removeTemplatePromos, 500);
+            setTimeout(removeTemplatePromos, 1500);
           `}
         </Script>
       </body>
