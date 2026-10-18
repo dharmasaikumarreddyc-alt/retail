@@ -26,18 +26,14 @@ export default function MerchantLoginClient() {
         body: JSON.stringify({ email: email.trim(), password }),
       });
       const login = await loginResponse.json();
-      if (!loginResponse.ok) {
-        throw new Error(login.detail || 'Email or password is incorrect.');
-      }
+      if (!loginResponse.ok) throw new Error(login.detail || 'Email or password is incorrect.');
 
       const profileResponse = await fetch(`${backendUrl}/auth/me`, {
         cache: 'no-store',
         headers: { Authorization: `Bearer ${login.access_token}` },
       });
       const profile = await profileResponse.json();
-      if (!profileResponse.ok) {
-        throw new Error(profile.detail || 'Could not verify this account.');
-      }
+      if (!profileResponse.ok) throw new Error(profile.detail || 'Could not verify this account.');
       if (profile.role !== 'merchant' || !profile.merchant_id) {
         throw new Error('That is a customer account. Use the customer sign-in instead.');
       }
@@ -56,7 +52,7 @@ export default function MerchantLoginClient() {
     <main className="merchant-login-root">
       <header className="merchant-login-topbar">
         <Link className="merchant-brand" href="/merchant">
-          <img className="merchant-brand-logo" src="/images/logo.svg" alt="AI Mavericks" />
+          <img className="merchant-brand-logo" src="/images/logo.svg" alt="Loopora" />
         </Link>
         <Link className="merchant-login-customer-link" href="/login">Customer sign in <i className="fas fa-arrow-up-right-from-square" /></Link>
       </header>
@@ -91,37 +87,14 @@ export default function MerchantLoginClient() {
             <label className="merchant-field-label" htmlFor="merchant-email">Email address</label>
             <div className="merchant-field">
               <i className="far fa-envelope" aria-hidden="true" />
-              <input
-                autoComplete="username"
-                id="merchant-email"
-                name="email"
-                type="email"
-                placeholder="you@yourrestaurant.com"
-                value={email}
-                onChange={event => setEmail(event.target.value)}
-                required
-              />
+              <input autoComplete="username" id="merchant-email" name="email" type="email" placeholder="you@yourrestaurant.com" value={email} onChange={event => setEmail(event.target.value)} required />
             </div>
 
             <label className="merchant-field-label" htmlFor="merchant-password">Password</label>
             <div className="merchant-field">
               <i className="fas fa-lock" aria-hidden="true" />
-              <input
-                autoComplete="current-password"
-                id="merchant-password"
-                name="password"
-                type={showPassword ? 'text' : 'password'}
-                placeholder="Enter your password"
-                value={password}
-                onChange={event => setPassword(event.target.value)}
-                required
-              />
-              <button
-                className="merchant-password-toggle"
-                type="button"
-                onClick={() => setShowPassword(value => !value)}
-                aria-label={showPassword ? 'Hide password' : 'Show password'}
-              >
+              <input autoComplete="current-password" id="merchant-password" name="password" type={showPassword ? 'text' : 'password'} placeholder="Enter your password" value={password} onChange={event => setPassword(event.target.value)} required />
+              <button className="merchant-password-toggle" type="button" onClick={() => setShowPassword(value => !value)} aria-label={showPassword ? 'Hide password' : 'Show password'}>
                 <i className={`far ${showPassword ? 'fa-eye-slash' : 'fa-eye'}`} />
               </button>
             </div>
@@ -136,7 +109,7 @@ export default function MerchantLoginClient() {
       </div>
 
       <footer className="merchant-login-footer">
-        <span>© Aisle Merchant Workspace</span>
+        <span>© Loopora Merchant Workspace</span>
         <Link href="/login">Customer sign in <i className="fas fa-arrow-right" /></Link>
       </footer>
     </main>
