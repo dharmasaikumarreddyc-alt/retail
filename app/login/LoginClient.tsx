@@ -45,7 +45,7 @@ export default function LoginClient() {
           setError('Customer sign-in only. This is a merchant account; use the merchant portal below.');
           return;
         }
-        saveAuthenticatedToken('customer', data.access_token);
+        saveAuthenticatedToken('customer', data.access_token, rememberMe);
 
         // Notify other components that auth state changed
         window.dispatchEvent(new Event('authChanged'));
@@ -118,11 +118,6 @@ export default function LoginClient() {
                 Remember Me
               </label>
             </div>
-          </div>
-          <div className="form-group">
-            <Link href="/forgot-password" className="text-primary">
-              Forgot Password
-            </Link>
           </div>
         </div>
         <div className="text-center">
