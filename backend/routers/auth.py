@@ -15,6 +15,12 @@ from config import settings
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
 
+DEMO_CUSTOMER_EMAIL = "customer@loopora.demo"
+DEMO_CUSTOMER_PASSWORD = "LooporaDemo123!"
+DEMO_MERCHANT_EMAIL = "merchant@loopora.demo"
+DEMO_MERCHANT_PASSWORD = "LooporaMerchant123!"
+DEMO_MERCHANT_ID = "cafe-verde"
+
 
 async def get_current_user(
     token: str = Depends(oauth2_scheme),
@@ -85,12 +91,36 @@ async def login(
 
 @router.post("/login/json", response_model=Token)
 async def login_json(credentials: UserLogin, db: AsyncSession = Depends(get_db)):
-    """Login with JSON body (alternative to form)."""
-    user = await AuthService.authenticate_user(
-        db=db,
-        email=credentials.email,
-        password=credentials.password
-    )
+    """Login with JSON body, including intentionally public demo accounts."""
+    normalized_email = credentials.email.strip().lower()
+    user = None
+
+    if normalized_email == DEMO_CUSTOMER_EMAIL and credentials.password == DEMO_CUSTOMER_PASSWORD:
+        user = await AuthService.get_user_by_email(db, DEMO_CUSTOMER_EMAIL)
+        if user is None:
+            user = await AuthService.create_user(
+                db=db,
+                email=DEMO_CUSTOMER_EMAIL,
+                name="Loopora Demo Customer",
+                password=DEMO_CUSTOMER_PASSWORD,
+            )
+    elif normalized_email == DEMO_MERCHANT_EMAIL and credentials.password == DEMO_MERCHANT_PASSWORD:
+        account_result = await db.execute(
+            select(MerchantAccountDB).where(MerchantAccountDB.merchant_id == DEMO_MERCHANT_ID)
+        )
+        merchant_account = account_result.scalar_one_or_none()
+        if merchant_account is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="The demo merchant workspace is not seeded yet."
+            )
+        user = await AuthService.get_user_by_id(db, merchant_account.user_id)
+    else:
+        user = await AuthService.authenticate_user(
+            db=db,
+            email=credentials.email,
+            password=credentials.password
+        )
 
     if not user:
         raise HTTPException(
