@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import MerchantDashboardClient from './MerchantDashboardClient';
+import ReviewInsightFormatter from './ReviewInsightFormatter';
 
 export const metadata: Metadata = {
   title: 'Store Analytics | Merchant Dashboard',
@@ -8,5 +9,10 @@ export const metadata: Metadata = {
 
 export default async function MerchantDashboardPage({ params }: { params: Promise<{ merchantId: string }> }) {
   const { merchantId } = await params;
-  return <MerchantDashboardClient merchantId={merchantId} />;
+  return (
+    <>
+      <MerchantDashboardClient merchantId={merchantId} />
+      <ReviewInsightFormatter />
+    </>
+  );
 }
