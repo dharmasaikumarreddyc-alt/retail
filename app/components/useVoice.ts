@@ -38,6 +38,33 @@ function bestTranscript(result: any): string {
   return choices[0].transcript;
 }
 
+function preferredRecordingMimeType(): string | undefined {
+  if (typeof MediaRecorder === 'undefined') return undefined;
+  const candidates = [
+    'audio/webm;codecs=opus',
+    'audio/webm',
+    'audio/mp4',
+    'audio/mp4;codecs=mp4a.40.2',
+  ];
+  return candidates.find((type) => {
+    try {
+      return MediaRecorder.isTypeSupported(type);
+    } catch {
+      return false;
+    }
+  });
+}
+
+async function blobToBase64(blob: Blob): Promise<string> {
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
+}
+
 export function useVoice(lang = 'en-IN') {
   const [supported, setSupported] = useState(false);
   const [ttsSupported, setTtsSupported] = useState(false);
@@ -47,10 +74,17 @@ export function useVoice(lang = 'en-IN') {
   const [micError, setMicError] = useState<string>('');
   const [interim, setInterim] = useState<string>('');
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
   const voiceRef = useRef<SpeechSynthesisVoice | null>(null);
 
   useEffect(() => {
-    const hasSTT = !!getRecognitionCtor();
+    const hasBrowserSTT = !!getRecognitionCtor();
+    const hasCloudCapture =
+      typeof window !== 'undefined' &&
+      typeof MediaRecorder !== 'undefined' &&
+      Boolean(navigator.mediaDevices?.getUserMedia);
+    const hasSTT = hasBrowserSTT || hasCloudCapture;
     const hasTTS = typeof window !== 'undefined' && 'speechSynthesis' in window;
     setSupported(hasSTT && hasTTS);
     setTtsSupported(hasTTS);
@@ -74,6 +108,8 @@ export function useVoice(lang = 'en-IN') {
     return () => {
       try {
         recognitionRef.current?.abort();
+        if (mediaRecorderRef.current?.state !== 'inactive') mediaRecorderRef.current?.stop();
+        mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
         if (typeof window !== 'undefined') window.speechSynthesis?.cancel();
       } catch {
         /* ignore */
@@ -140,12 +176,11 @@ export function useVoice(lang = 'en-IN') {
     setSpeaking(false);
   }, []);
 
-  const listen = useCallback(
+  const browserListen = useCallback(
     (timeoutMs = 17000): Promise<string> =>
       new Promise((resolve) => {
         const Ctor = getRecognitionCtor();
         if (!Ctor) {
-          setMicError('unsupported');
           resolve('');
           return;
         }
@@ -197,7 +232,6 @@ export function useVoice(lang = 'en-IN') {
             setMicError('');
             setInterim(interimStr || finalText);
             if (silenceTimer) clearTimeout(silenceTimer);
-            // Slightly longer pause helps Indian-English names and multi-word merchant names finish cleanly.
             if (finalText) silenceTimer = setTimeout(() => done(finalText), 1200);
           };
 
@@ -233,9 +267,155 @@ export function useVoice(lang = 'en-IN') {
     [lang]
   );
 
+  const cloudListen = useCallback(
+    async (timeoutMs = 17000): Promise<string | null> => {
+      if (
+        typeof window === 'undefined' ||
+        typeof MediaRecorder === 'undefined' ||
+        !navigator.mediaDevices?.getUserMedia
+      ) {
+        return null;
+      }
+
+      let stream: MediaStream | null = null;
+      let browserFallback = '';
+      let browserRec: SpeechRecognitionLike | null = null;
+      let browserSilenceTimer: ReturnType<typeof setTimeout> | undefined;
+      let hardStopTimer: ReturnType<typeof setTimeout> | undefined;
+
+      try {
+        if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+            channelCount: 1,
+          },
+        });
+        mediaStreamRef.current = stream;
+
+        const mimeType = preferredRecordingMimeType();
+        const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+        mediaRecorderRef.current = recorder;
+        const chunks: Blob[] = [];
+
+        const recorded = new Promise<Blob>((resolve) => {
+          recorder.ondataavailable = (event) => {
+            if (event.data?.size) chunks.push(event.data);
+          };
+          recorder.onstop = () => {
+            resolve(new Blob(chunks, { type: recorder.mimeType || mimeType || 'audio/webm' }));
+          };
+        });
+
+        const stopRecorder = () => {
+          if (hardStopTimer) clearTimeout(hardStopTimer);
+          if (browserSilenceTimer) clearTimeout(browserSilenceTimer);
+          try {
+            if (recorder.state !== 'inactive') recorder.stop();
+          } catch {
+            /* ignore */
+          }
+          try { browserRec?.stop(); } catch { /* ignore */ }
+        };
+
+        // Use browser STT only as an end-of-speech detector and emergency fallback.
+        const Ctor = getRecognitionCtor();
+        if (Ctor) {
+          browserRec = new Ctor();
+          browserRec.lang = lang;
+          browserRec.interimResults = true;
+          browserRec.continuous = true;
+          browserRec.maxAlternatives = 3;
+          recognitionRef.current = browserRec;
+          browserRec.onresult = (event: any) => {
+            let interimText = '';
+            for (let i = event.resultIndex; i < event.results.length; i++) {
+              const res = event.results[i];
+              const text = bestTranscript(res);
+              if (!text) continue;
+              if (res.isFinal) browserFallback = `${browserFallback} ${text}`.trim();
+              else interimText = `${interimText} ${text}`.trim();
+            }
+            setInterim(interimText || browserFallback);
+            if (browserSilenceTimer) clearTimeout(browserSilenceTimer);
+            if (browserFallback) browserSilenceTimer = setTimeout(stopRecorder, 1250);
+          };
+          browserRec.onerror = () => {
+            // Chirp recording continues even if browser recognition is unavailable.
+          };
+          browserRec.onend = () => {
+            if (browserFallback) stopRecorder();
+          };
+        }
+
+        setListening(true);
+        setInterim('Listening…');
+        recorder.start(250);
+        try { browserRec?.start(); } catch { /* ignore */ }
+        hardStopTimer = setTimeout(stopRecorder, Math.min(timeoutMs, 12000));
+
+        const blob = await recorded;
+        stream.getTracks().forEach((track) => track.stop());
+        mediaStreamRef.current = null;
+        mediaRecorderRef.current = null;
+        recognitionRef.current = null;
+        setListening(false);
+        setInterim('Understanding…');
+
+        if (!blob.size) return browserFallback || '';
+        const audio = await blobToBase64(blob);
+        const response = await fetch('/api/speech/transcribe', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ audio, language: lang, mimeType: blob.type }),
+        });
+        const data = await response.json().catch(() => ({}));
+        setInterim('');
+
+        if (response.ok && data?.success && typeof data.transcript === 'string' && data.transcript.trim()) {
+          setMicError('');
+          return data.transcript.trim();
+        }
+
+        // When Google STT is not configured yet, preserve the same spoken turn using browser STT.
+        if (browserFallback) return browserFallback.trim();
+        return null;
+      } catch (error) {
+        stream?.getTracks().forEach((track) => track.stop());
+        mediaStreamRef.current = null;
+        mediaRecorderRef.current = null;
+        setListening(false);
+        setInterim('');
+        if (browserFallback) return browserFallback.trim();
+        if (error instanceof DOMException && error.name === 'NotAllowedError') {
+          setMicError('not-allowed');
+        }
+        return null;
+      } finally {
+        if (hardStopTimer) clearTimeout(hardStopTimer);
+        if (browserSilenceTimer) clearTimeout(browserSilenceTimer);
+        try { browserRec?.abort(); } catch { /* ignore */ }
+      }
+    },
+    [lang]
+  );
+
+  const listen = useCallback(
+    async (timeoutMs = 17000): Promise<string> => {
+      const cloudResult = await cloudListen(timeoutMs);
+      if (cloudResult !== null) return cloudResult;
+      return browserListen(timeoutMs);
+    },
+    [browserListen, cloudListen]
+  );
+
   const stopListening = useCallback(() => {
     try {
       recognitionRef.current?.stop();
+      if (mediaRecorderRef.current?.state !== 'inactive') mediaRecorderRef.current?.stop();
+      mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
     } catch {
       /* ignore */
     }
