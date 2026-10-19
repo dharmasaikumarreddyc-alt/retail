@@ -6,6 +6,9 @@ import Link from 'next/link';
 import { backendUrl } from '../lib/backend';
 import { saveAuthenticatedToken } from '../lib/auth';
 
+const DEMO_EMAIL = 'customer@loopora.demo';
+const DEMO_PASSWORD = 'LooporaDemo123!';
+
 export default function LoginClient() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -15,6 +18,12 @@ export default function LoginClient() {
   const [error, setError] = useState<string | null>(null);
   const router = useRouter();
 
+  const loadDemoCredentials = () => {
+    setEmail(DEMO_EMAIL);
+    setPassword(DEMO_PASSWORD);
+    setError(null);
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
@@ -23,13 +32,8 @@ export default function LoginClient() {
     try {
       const response = await fetch(`${backendUrl}/auth/login/json`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          email,
-          password
-        })
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: email.trim(), password })
       });
 
       if (response.ok) {
@@ -37,19 +41,14 @@ export default function LoginClient() {
         const profileResponse = await fetch(`${backendUrl}/auth/me`, {
           headers: { Authorization: `Bearer ${data.access_token}` },
         });
-        if (!profileResponse.ok) {
-          throw new Error('Could not load your account profile.');
-        }
+        if (!profileResponse.ok) throw new Error('Could not load your account profile.');
         const profile: { role: 'customer' | 'merchant'; merchant_id: string | null } = await profileResponse.json();
         if (profile.role !== 'customer') {
           setError('Customer sign-in only. This is a merchant account; use the merchant portal below.');
           return;
         }
         saveAuthenticatedToken('customer', data.access_token, rememberMe);
-
-        // Notify other components that auth state changed
         window.dispatchEvent(new Event('authChanged'));
-
         router.push('/shop');
       } else {
         const errorData = await response.json();
@@ -66,76 +65,44 @@ export default function LoginClient() {
   return (
     <div className="login-area">
       <h2 className="text-secondary text-center">Customer Login</h2>
-      <p className="text-center m-b25">Sign in to your customer account to shop and manage orders.</p>
+      <p className="text-center m-b20">Sign in to shop, use CartPilot, and manage orders.</p>
 
-      {error && (
-        <div className="alert alert-danger" role="alert">
-          {error}
-        </div>
-      )}
+      <button type="button" className="btn btn-outline-secondary w-100 mb-4" onClick={loadDemoCredentials}>
+        <i className="fas fa-wand-magic-sparkles me-2" /> Load customer demo credentials
+      </button>
+
+      {error && <div className="alert alert-danger" role="alert">{error}</div>}
 
       <form onSubmit={handleSubmit}>
         <div className="m-b30">
           <label className="label-title">Email Address</label>
-          <input
-            name="email"
-            required
-            className="form-control"
-            placeholder="Email Address"
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-          />
+          <input name="email" required className="form-control" placeholder="Email Address" type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="username" />
         </div>
         <div className="m-b15">
           <label className="label-title">Password</label>
           <div className="secure-input">
-            <input
-              type={showPassword ? 'text' : 'password'}
-              name="password"
-              className="form-control dz-password"
-              placeholder="Password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-            />
-            <div className="show-pass" onClick={() => setShowPassword(!showPassword)} style={{ cursor: 'pointer' }}>
+            <input type={showPassword ? 'text' : 'password'} name="password" className="form-control dz-password" placeholder="Password" value={password} onChange={(e) => setPassword(e.target.value)} required autoComplete="current-password" />
+            <button type="button" className="show-pass border-0 bg-transparent" onClick={() => setShowPassword(!showPassword)} aria-label={showPassword ? 'Hide password' : 'Show password'}>
               <i className={`fa-regular ${showPassword ? 'fa-eye-slash' : 'fa-eye'}`}></i>
-            </div>
+            </button>
           </div>
         </div>
         <div className="form-row d-flex justify-content-between m-b30">
           <div className="form-group">
             <div className="custom-control custom-checkbox">
-              <input
-                type="checkbox"
-                className="form-check-input"
-                id="basic_checkbox_1"
-                checked={rememberMe}
-                onChange={(e) => setRememberMe(e.target.checked)}
-              />
-              <label className="form-check-label" htmlFor="basic_checkbox_1">
-                Remember Me
-              </label>
+              <input type="checkbox" className="form-check-input" id="basic_checkbox_1" checked={rememberMe} onChange={(e) => setRememberMe(e.target.checked)} />
+              <label className="form-check-label" htmlFor="basic_checkbox_1">Remember Me</label>
             </div>
           </div>
         </div>
-        <div className="text-center">
-          <button
-            type="submit"
-            className="btn btn-secondary btnhover text-uppercase me-2 sign-btn"
-            disabled={loading}
-          >
+        <div className="text-center d-flex flex-wrap gap-2 justify-content-center">
+          <button type="submit" className="btn btn-secondary btnhover text-uppercase sign-btn" disabled={loading}>
             {loading ? 'Signing In...' : 'Sign In'}
           </button>
-          <Link href="/register" className="btn btn-outline-secondary btnhover text-uppercase">
-            Register
-          </Link>
+          <Link href="/register" className="btn btn-outline-secondary btnhover text-uppercase">Register</Link>
         </div>
       </form>
-      <p className="text-center mt-4 mb-0">
-        Run a restaurant? <Link href="/merchant/login" className="text-primary">Merchant sign in</Link>
-      </p>
+      <p className="text-center mt-4 mb-0">Run a restaurant? <Link href="/merchant/login" className="text-primary">Merchant sign in</Link></p>
     </div>
   );
 }
