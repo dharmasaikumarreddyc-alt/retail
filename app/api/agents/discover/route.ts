@@ -4,7 +4,7 @@ import { llmJSON, llmEnabled } from '../llm';
 
 // POST /api/agents/discover
 // Merchant Discovery Agent - Finds & ranks relevant merchants for a natural-language request.
-// Uses the LLM to reason over the registered merchant list; falls back to keyword search.
+// Simple product requests use deterministic matching immediately; complex requests use the LLM.
 
 const SYSTEM_PROMPT = `You are the Merchant Discovery Agent for an agentic commerce marketplace.
 The customer speaks in natural language (e.g. "find me a local coffee shop with vegan breakfast and order ahead").
@@ -29,7 +29,6 @@ interface LlmDiscoverResult {
   clarifyingQuestion?: string;
 }
 
-// Parse the leading number out of a distance string like "0.8 mi".
 function distanceOf(m: Merchant): number {
   const n = parseFloat(m.distance);
   return Number.isFinite(n) ? n : 99;
@@ -42,6 +41,13 @@ function buildMerchantContext(list: Merchant[]): string {
         `- id: ${m.id} | ${m.name} (${m.type}) | categories: ${m.category.join(', ')} | rating: ${m.rating} | distance: ${m.distance} | offers: ${m.offers.join('; ')}`
     )
     .join('\n');
+}
+
+function canUseFastPath(query: string, candidates: Merchant[]): boolean {
+  if (candidates.length === 0) return false;
+  const words = query.toLowerCase().match(/[a-z0-9]+/g) ?? [];
+  const needsReasoning = /\b(vegan|vegetarian|healthy|organic|cheapest|cheaper|best|highest|rating|rated|offer|discount|under|budget|within|without|except|allergy|gluten|compare|versus|vs)\b/i.test(query);
+  return words.length <= 7 && !needsReasoning;
 }
 
 async function aiDiscover(
@@ -60,7 +66,6 @@ async function aiDiscover(
 
   if (!result?.matches?.length) return null;
 
-  // Map AI matches back to real merchant records, preserving AI order, attaching the reason.
   const merchants: Merchant[] = [];
   for (const match of result.matches) {
     const merchant = merchantsDB.find((m) => m.id === match.id && m.isOpen);
@@ -86,21 +91,20 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: false, error: 'Query is required' }, { status: 400 });
     }
 
-    // Radius filter — only consider open merchants within the requested distance.
     const radius = typeof maxDistance === 'number' && maxDistance > 0 ? maxDistance : 99;
     const withinRadius = merchantsDB.filter((m) => m.isOpen && distanceOf(m) <= radius);
 
-    // Try the real AI agent first; fall back to keyword matching if it's unavailable.
-    const ai = await aiDiscover(query, withinRadius);
-    const fallbackMerchants = await searchMerchants(query);
-    const merchants =
-      ai?.merchants ?? fallbackMerchants.filter((m) => distanceOf(m) <= radius);
+    // Deterministic matching is dramatically faster for requests like "coffee" or "biryani".
+    const fallbackMerchants = (await searchMerchants(query)).filter((m) => distanceOf(m) <= radius);
+    const fastPath = canUseFastPath(query, fallbackMerchants);
+    const ai = fastPath ? null : await aiDiscover(query, withinRadius);
+    const merchants = fastPath ? fallbackMerchants : (ai?.merchants ?? fallbackMerchants);
     const usedAI = Boolean(ai);
 
     const response = {
       success: true,
       agent: 'MerchantDiscoveryAgent',
-      mode: usedAI ? 'llm' : llmEnabled() ? 'llm-fallback' : 'keyword',
+      mode: fastPath ? 'keyword-fast' : usedAI ? 'llm' : llmEnabled() ? 'llm-fallback' : 'keyword',
       query,
       timestamp: new Date().toISOString(),
       results: {
