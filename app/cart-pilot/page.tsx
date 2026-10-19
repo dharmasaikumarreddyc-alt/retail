@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import Header from '../components/Header';
 import Footer from '../components/Footer';
 import CartPilotClient from './CartPilotClient';
+import CartPilotAuthGate from './CartPilotAuthGate';
 
 export const metadata: Metadata = {
   title: 'Cart Pilot | Agentic AI Checkout',
@@ -14,7 +15,9 @@ export default function CartPilotPage() {
       <Header />
 
       <div className="page-content bg-light" style={{ paddingTop: '0', minHeight: '100vh' }}>
-        <CartPilotClient />
+        <CartPilotAuthGate>
+          <CartPilotClient />
+        </CartPilotAuthGate>
       </div>
 
       <Footer />
