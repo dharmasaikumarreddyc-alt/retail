@@ -4,6 +4,7 @@ import StyleLoader from "./components/StyleLoader";
 import ScriptInitializer from "./components/ScriptInitializer";
 import ThemeProvider from "./components/ThemeProvider";
 import "./globals.css";
+import "./home-fixes.css";
 
 export const metadata: Metadata = {
   title: "Loopora",
