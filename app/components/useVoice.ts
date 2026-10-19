@@ -123,9 +123,16 @@ export function useVoice(lang = 'en-IN') {
   }, []);
 
   const unlockAudio = useCallback(() => {
-    if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
+    if (typeof window === 'undefined') return;
     try {
-      window.speechSynthesis.resume();
+      if ('speechSynthesis' in window) window.speechSynthesis.resume();
+      // Create/resume the Web Audio context while we are still inside the user's
+      // initial tap. iOS may block a brand-new context on later hands-free turns.
+      const AudioContextCtor = window.AudioContext || (window as any).webkitAudioContext;
+      if (AudioContextCtor && (!audioContextRef.current || audioContextRef.current.state === 'closed')) {
+        audioContextRef.current = new AudioContextCtor();
+      }
+      void audioContextRef.current?.resume();
     } catch {
       /* ignore */
     }
@@ -239,11 +246,7 @@ export function useVoice(lang = 'en-IN') {
 
         setListening(true);
         setInterim('Listening…');
-        try {
-          rec.start();
-        } catch {
-          done('');
-        }
+        try { rec.start(); } catch { done(''); }
         killTimer = setTimeout(() => done(finalText), timeoutMs);
       }),
     [lang]
@@ -304,14 +307,17 @@ export function useVoice(lang = 'en-IN') {
         setInterim('Listening…');
         recorder.start(200);
 
-        // IMPORTANT: use the SAME microphone stream for silence detection.
-        // Do not run webkitSpeechRecognition at the same time as MediaRecorder on iPhone;
-        // two mic consumers can cause later voice turns to stop producing transcripts.
+        // Single-mic design: MediaRecorder captures the audio and this Web Audio
+        // analyser reads the SAME stream for end-of-speech detection. We never run
+        // webkitSpeechRecognition concurrently with MediaRecorder on iPhone.
         const AudioContextCtor = window.AudioContext || (window as any).webkitAudioContext;
-        if (AudioContextCtor) {
-          const audioContext: AudioContext = new AudioContextCtor();
+        let audioContext = audioContextRef.current;
+        if (AudioContextCtor && (!audioContext || audioContext.state === 'closed')) {
+          audioContext = new AudioContextCtor();
           audioContextRef.current = audioContext;
-          try { await audioContext.resume(); } catch { /* ignore */ }
+        }
+        if (audioContext) {
+          try { await audioContext.resume(); } catch { /* context was already unlocked if iOS requires it */ }
           source = audioContext.createMediaStreamSource(stream);
           analyser = audioContext.createAnalyser();
           analyser.fftSize = 1024;
@@ -343,7 +349,6 @@ export function useVoice(lang = 'en-IN') {
               voiceFrames = Math.max(0, voiceFrames - 1);
             }
 
-            // End quickly after the user finishes, instead of waiting for a long timeout.
             if (heardSpeech && now - lastVoiceAt > 700 && now - startedAt > 450) {
               stopRecorder();
               return;
@@ -361,8 +366,7 @@ export function useVoice(lang = 'en-IN') {
         mediaRecorderRef.current = null;
         try { source?.disconnect(); } catch { /* ignore */ }
         try { analyser?.disconnect(); } catch { /* ignore */ }
-        try { await audioContextRef.current?.close(); } catch { /* ignore */ }
-        audioContextRef.current = null;
+        // Keep audioContextRef alive for the next hands-free turn on iPhone.
 
         setListening(false);
         setInterim('Understanding…');
@@ -390,8 +394,6 @@ export function useVoice(lang = 'en-IN') {
           return '';
         }
 
-        // Cloud capture worked, so do not immediately open a second competing mic session.
-        // The assistant will simply retry the prompt if Google STT returned no transcript.
         return '';
       } catch (error) {
         stream?.getTracks().forEach((track) => track.stop());
@@ -401,8 +403,6 @@ export function useVoice(lang = 'en-IN') {
           cancelAnimationFrame(vadFrameRef.current);
           vadFrameRef.current = null;
         }
-        try { await audioContextRef.current?.close(); } catch { /* ignore */ }
-        audioContextRef.current = null;
         setListening(false);
         setInterim('');
         if (error instanceof DOMException && error.name === 'NotAllowedError') {
@@ -435,6 +435,7 @@ export function useVoice(lang = 'en-IN') {
       }
       if (mediaRecorderRef.current?.state !== 'inactive') mediaRecorderRef.current?.stop();
       mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
+      // Explicit Stop ends the assistant session, so releasing the context is safe.
       void audioContextRef.current?.close();
       audioContextRef.current = null;
     } catch {
