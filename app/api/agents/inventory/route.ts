@@ -3,24 +3,26 @@ import { searchProducts, getMerchantProducts, merchantsDB, type Product } from '
 import { llmJSON, llmEnabled } from '../llm';
 
 // POST /api/agents/inventory
-// Inventory Agent - Picks the products from a merchant that best satisfy the request.
-// Uses the LLM to reason over the catalog; falls back to keyword search.
+// Inventory Agent - Picks only the products that directly satisfy the request.
 
 const SYSTEM_PROMPT = `You are the Inventory Agent for an agentic commerce marketplace.
-Given a customer's request and a single merchant's catalog, choose the items that best fulfil the request.
-Pick a sensible, minimal set (usually 1-3 items) — e.g. "coffee and a vegan breakfast" -> one coffee + one vegan breakfast item.
+Given a customer's request and a single merchant's catalog, choose only items that directly fulfil the request.
 
-Rules:
+STRICT RULES:
 - Only choose from the provided product ids. Never invent products.
-- Respect dietary/other constraints stated in the request.
-- Order the items best-first.
-- If the EXACT item requested is not available, mark it as an alternative and explain clearly.
+- Respect dietary and other constraints.
+- Do NOT add related items, upsells, complements, or inferred extras.
+- If the customer asks for ONE thing (for example: "coffee"), return exactly ONE best direct match.
+- "Coffee" must not automatically add milk, cappuccino, pastry, breakfast, or any other item.
+- If the customer explicitly asks for multiple things, return one best direct match for each requested thing.
+- If the exact requested item is unavailable, mark any substitute as an alternative. Never silently substitute it.
+- If the request asks for ingredients of a dish, select the best matching dish only; the application will provide ingredient guidance separately.
 
 Respond with ONLY a JSON object:
 {
-  "items": [{ "id": "<product-id>", "reason": "<one short sentence why it fits>", "isAlternative": true/false, "originalRequest": "<what customer asked for if this is alternative>" }],
+  "items": [{ "id": "<product-id>", "reason": "<one short sentence why it directly matches>", "isAlternative": true/false, "originalRequest": "<what customer asked for if this is alternative>" }],
   "exactMatchFound": true/false,
-  "spoken": "<one friendly sentence. If alternatives, say something like 'I couldn't find X, but Y is a great alternative. Would you like that instead?'>"
+  "spoken": "<one concise sentence describing only what was requested>"
 }`;
 
 interface LlmInventoryResult {
@@ -34,6 +36,71 @@ interface AiSelectResult {
   spoken?: string;
   exactMatchFound: boolean;
   alternatives: { productId: string; originalRequest: string; reason: string }[];
+}
+
+const STOP_WORDS = new Set([
+  'i', 'me', 'my', 'a', 'an', 'the', 'please', 'want', 'need', 'get', 'give', 'show', 'find', 'order',
+  'for', 'from', 'near', 'nearby', 'some', 'one', 'item', 'items', 'would', 'like', 'to', 'of', 'with',
+]);
+
+function requestTerms(query: string): string[] {
+  return query
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, ' ')
+    .split(/\s+/)
+    .map((word) => word.trim())
+    .filter((word) => word.length > 1 && !STOP_WORDS.has(word));
+}
+
+function isIngredientRequest(query: string): boolean {
+  return /\b(ingredient|ingredients|recipe|what goes into|what is in)\b/i.test(query);
+}
+
+function biryaniIngredients(query: string): string[] | null {
+  if (!/\bbiryani\b/i.test(query) || !isIngredientRequest(query)) return null;
+  const base = [
+    'basmati rice', 'onion', 'tomato', 'yogurt', 'ginger', 'garlic', 'green chilli', 'mint', 'coriander',
+    'lemon', 'ghee or oil', 'salt', 'turmeric', 'red chilli powder', 'coriander powder', 'garam masala',
+    'biryani masala', 'cumin', 'bay leaf', 'cinnamon', 'cloves', 'cardamom', 'saffron or food colour',
+  ];
+  if (/\bveg|vegetable|vegetarian\b/i.test(query)) {
+    return [...base, 'mixed vegetables (carrot, beans, peas, potato, cauliflower)'];
+  }
+  return [...base, 'chicken'];
+}
+
+function enrichRecipeDescription(product: Product, ingredients: string[] | null): Product {
+  if (!ingredients) return product;
+  return {
+    ...product,
+    description: `Ingredients: ${ingredients.join(', ')}.`,
+    aiReason: 'Showing the ingredient list you asked for.',
+  };
+}
+
+function directFallbackMatches(catalog: Product[], query: string): Product[] {
+  const terms = requestTerms(query).filter((term) => !['ingredient', 'ingredients', 'recipe'].includes(term));
+  if (terms.length === 0) return [];
+
+  const scored = catalog
+    .map((product) => {
+      const name = product.name.toLowerCase();
+      const category = product.category.toLowerCase();
+      const tags = product.tags.map((tag) => tag.toLowerCase());
+      let score = 0;
+      for (const term of terms) {
+        if (name === term) score += 20;
+        else if (name.includes(term)) score += 10;
+        if (category === term || category.includes(term)) score += 5;
+        if (tags.some((tag) => tag === term)) score += 6;
+        else if (tags.some((tag) => tag.includes(term))) score += 2;
+      }
+      return { product, score };
+    })
+    .filter(({ score }) => score > 0)
+    .sort((a, b) => b.score - a.score);
+
+  return scored.map(({ product }) => product);
 }
 
 async function aiSelectProducts(
@@ -98,65 +165,82 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: false, error: 'Merchant not found' }, { status: 404 });
     }
 
-    // Fetch products (works for both local and DummyJSON merchants)
+    const normalizedQuery = typeof query === 'string' ? query.trim() : '';
     const allMerchantProducts = await getMerchantProducts(merchantId);
+    const ingredients = biryaniIngredients(normalizedQuery);
 
-    // Try the real AI agent first; fall back to keyword matching.
-    const ai = await aiSelectProducts(merchantId, merchant.name, query || '', allMerchantProducts);
-    const matchingProducts = await searchProducts(merchantId, query || '');
-    const catalogAlternatives =
-      !ai && matchingProducts.length === 0 ? allMerchantProducts.slice(0, 3) : [];
-    const products = ai?.products ?? (matchingProducts.length > 0 ? matchingProducts : catalogAlternatives);
+    // Use AI first, but strictly post-filter to direct matches. Keyword scoring is the deterministic fallback.
+    const ai = await aiSelectProducts(merchantId, merchant.name, normalizedQuery, allMerchantProducts);
+    const deterministic = directFallbackMatches(allMerchantProducts, normalizedQuery);
+    const legacyMatches = deterministic.length ? deterministic : await searchProducts(merchantId, normalizedQuery);
+
+    let products = ai?.products?.length ? ai.products : legacyMatches;
+
+    // A generic single-item request should result in one item only. The LLM may otherwise over-select related products.
+    const explicitMultiItem = /\b(and|plus|with|,|\&)\b/i.test(normalizedQuery) && !isIngredientRequest(normalizedQuery);
+    if (!explicitMultiItem && products.length > 1) products = products.slice(0, 1);
+
+    // Ingredient questions are informational: show the best matching biryani item with a complete ingredient description.
+    if (ingredients && products.length > 0) {
+      products = [enrichRecipeDescription(products[0], ingredients)];
+    }
+
+    const catalogAlternatives = !ai && products.length === 0 ? allMerchantProducts.slice(0, 3) : [];
+    if (products.length === 0) products = catalogAlternatives;
     const usedAI = Boolean(ai);
 
     const alternatives =
       ai?.alternatives ??
       catalogAlternatives.map((product) => ({
         productId: product.id,
-        originalRequest: query || 'your request',
+        originalRequest: normalizedQuery || 'your request',
         reason: `Available at ${merchant.name}`,
       }));
     const hasAlternatives = alternatives.length > 0;
     const exactMatchFound = ai?.exactMatchFound ?? catalogAlternatives.length === 0;
 
-    // Build appropriate message
     let message = '';
     let alternativeMessage = '';
-    if (catalogAlternatives.length > 0) {
+    let spoken = ai?.spoken;
+
+    if (ingredients && products.length > 0) {
+      message = `Showing biryani ingredients at ${merchant.name}`;
+      spoken = `For biryani, you will need ${ingredients.join(', ')}.`;
+    } else if (catalogAlternatives.length > 0) {
       const names = catalogAlternatives.map((product) => product.name).join(', ');
       message = `No exact match found at ${merchant.name}`;
-      alternativeMessage = `I couldn't find an exact match for "${query}" at ${merchant.name}. Here are some items actually available there: ${names}. Would you like one of these instead?`;
+      alternativeMessage = `I couldn't find an exact match for "${normalizedQuery}" at ${merchant.name}. Available alternatives are ${names}. Would you like one of these instead?`;
+      spoken = alternativeMessage;
     } else if (products.length === 0) {
       message = `No matching products found at ${merchant.name}`;
     } else if (ai && hasAlternatives && !exactMatchFound) {
-      const altItems = alternatives.map(a => a.originalRequest).join(', ');
+      const altItems = alternatives.map((a) => a.originalRequest).join(', ');
       message = `"${altItems}" is not available at ${merchant.name}`;
-      alternativeMessage = `We found a similar alternative: ${products.map(p => p.name).join(', ')}. Would you like this instead?`;
+      alternativeMessage = `We found a similar alternative: ${products.map((p) => p.name).join(', ')}. Would you like this instead?`;
     } else {
-      message = `Found ${products.length} product${products.length > 1 ? 's' : ''} at ${merchant.name}`;
+      message = `Found ${products.length} direct match${products.length > 1 ? 'es' : ''} at ${merchant.name}`;
     }
 
-    const response = {
+    return NextResponse.json({
       success: true,
       agent: 'InventoryAgent',
       mode: usedAI ? 'llm' : llmEnabled() ? 'llm-fallback' : 'keyword',
       merchantId,
       merchantName: merchant.name,
-      query: query || '',
+      query: normalizedQuery,
       timestamp: new Date().toISOString(),
       results: {
         products,
         count: products.length,
         message,
-        spoken: catalogAlternatives.length > 0 ? alternativeMessage : ai?.spoken,
+        spoken,
         exactMatchFound,
         hasAlternatives,
         alternatives,
         alternativeMessage,
+        recipeIngredients: ingredients || undefined,
       },
-    };
-
-    return NextResponse.json(response);
+    });
   } catch (error) {
     console.error('Inventory Agent Error:', error);
     return NextResponse.json({ success: false, error: 'Internal server error' }, { status: 500 });
