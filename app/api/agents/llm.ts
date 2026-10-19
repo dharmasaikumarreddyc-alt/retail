@@ -1,6 +1,12 @@
+import { GoogleAuth } from 'google-auth-library';
+
+const USE_VERTEX = process.env.GOOGLE_GENAI_USE_VERTEXAI === 'true';
+const vertexAuth = new GoogleAuth({ scopes: ['https://www.googleapis.com/auth/cloud-platform'] });
+
 // Reusable LLM client for the agent API routes.
 //
-// Supports two backends, selected automatically by env vars:
+// Vertex AI is preferred when GOOGLE_GENAI_USE_VERTEXAI=true.
+// Otherwise supports these backends, selected automatically by env vars:
 //   1. Azure OpenAI  — set AZURE_OPENAI_ENDPOINT + AZURE_OPENAI_API_KEY + AZURE_OPENAI_DEPLOYMENT
 //   2. GitHub Models / Azure AI Inference (OpenAI-compatible) — set GITHUB_MODELS_TOKEN
 //
@@ -30,14 +36,33 @@ export interface ChatMessage {
 }
 
 export function llmEnabled(): boolean {
-  return USE_AZURE || Boolean(GH_TOKEN);
+  return USE_VERTEX || USE_AZURE || Boolean(GH_TOKEN);
 }
 
 /**
  * Build the request URL + headers for the active backend.
  * Exported so the streaming narrate route can reuse the same auth logic.
  */
-export function buildChatRequest(): { url: string; headers: Record<string, string>; modelField?: string; supportsTemperature: boolean } | null {
+export async function buildChatRequest(): Promise<{ url: string; headers: Record<string, string>; modelField?: string; supportsTemperature: boolean } | null> {
+  if (USE_VERTEX) {
+    const project = process.env.GOOGLE_CLOUD_PROJECT;
+    const location = process.env.GOOGLE_CLOUD_LOCATION || 'global';
+    if (!project) return null;
+    const host = location === 'global' ? 'aiplatform.googleapis.com' : `${location}-aiplatform.googleapis.com`;
+    try {
+      const token = await vertexAuth.getAccessToken();
+      if (!token) return null;
+      return {
+        url: `https://${host}/v1beta1/projects/${project}/locations/${location}/endpoints/openapi/chat/completions`,
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        modelField: `google/${(process.env.GOOGLE_MODEL || 'gemini-3.8-flash').replace(/^google\//, '')}`,
+        supportsTemperature: true,
+      };
+    } catch {
+      console.error('[llm] Vertex authentication failed');
+      return null;
+    }
+  }
   if (USE_AZURE) {
     return {
       url: `${AZURE_ENDPOINT}/openai/deployments/${AZURE_DEPLOYMENT}/chat/completions?api-version=${AZURE_API_VERSION}`,
@@ -70,7 +95,7 @@ export async function llmChat(
   messages: ChatMessage[],
   opts: { json?: boolean; temperature?: number; timeoutMs?: number } = {}
 ): Promise<string | null> {
-  const req = buildChatRequest();
+  const req = await buildChatRequest();
   if (!req) return null;
 
   const { json = false, temperature = 0.3, timeoutMs = 12000 } = opts;
@@ -93,14 +118,14 @@ export async function llmChat(
     });
 
     if (!res.ok) {
-      console.error('[llm] request failed', res.status, await res.text().catch(() => ''));
+      console.error('[llm] request failed', res.status);
       return null;
     }
 
     const data = await res.json();
     return data?.choices?.[0]?.message?.content ?? null;
-  } catch (err) {
-    console.error('[llm] error', err);
+  } catch {
+    console.error('[llm] request failed');
     return null;
   } finally {
     clearTimeout(timer);

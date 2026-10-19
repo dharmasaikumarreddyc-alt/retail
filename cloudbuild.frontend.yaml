@@ -15,4 +15,4 @@ images:
   - ${_IMAGE}
 substitutions:
   _BACKEND_URL: http://localhost:8000
-  _IMAGE: us-central1-docker.pkg.dev/$PROJECT_ID/retail/aisle-web:latest
+  _IMAGE: asia-south1-docker.pkg.dev/$PROJECT_ID/retail/aisle-web:latest

@@ -171,3 +171,8 @@ payment credentials.
   the provider account has available quota.
 - **Port already in use:** stop the other process using port `3000` or `8000`,
   or configure the relevant development server to use another port.
+
+## Google Cloud Run
+
+See [DEPLOY_GCP.md](./DEPLOY_GCP.md) for separate frontend/backend deployments
+in asia-south1 using Vertex AI and service-account authentication (no Gemini key).

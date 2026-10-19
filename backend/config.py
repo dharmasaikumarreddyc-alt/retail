@@ -32,7 +32,12 @@ class Settings(BaseSettings):
     AZURE_OPENAI_DEPLOYMENT: Optional[str] = None
     AZURE_OPENAI_API_VERSION: str = "2024-12-01-preview"
 
-    # Google AI Studio (Gemini)
+    # Vertex AI uses Application Default Credentials, never an API key.
+    GOOGLE_GENAI_USE_VERTEXAI: bool = False
+    GOOGLE_CLOUD_PROJECT: Optional[str] = None
+    GOOGLE_CLOUD_LOCATION: str = "global"
+
+    # Google AI Studio (optional local compatibility)
     GOOGLE_API_KEY: Optional[str] = None
     GOOGLE_MODEL: str = "gemini-3.8-flash"
 
@@ -63,7 +68,7 @@ class Settings(BaseSettings):
                 self.AZURE_OPENAI_DEPLOYMENT,
             )
         )
-        return azure_configured or bool(
+        return self.GOOGLE_GENAI_USE_VERTEXAI or azure_configured or bool(
             (self.GROQ_API_KEY and self.GROQ_API_KEY.strip())
             or (self.GOOGLE_API_KEY and self.GOOGLE_API_KEY.strip())
         )
@@ -100,6 +105,9 @@ settings = Settings()
 # Prefers Azure OpenAI, then Groq, then Google AI Studio.
 def get_model_client():
     from autogen_core.models import ModelFamily
+
+    if settings.GOOGLE_GENAI_USE_VERTEXAI:
+        return get_google_model_client()
 
     if all(
         value and value.strip()
@@ -163,6 +171,10 @@ def get_model_client():
 
 def get_google_model_client():
     """Create a Gemini client for features that explicitly require Google AI."""
+    if settings.GOOGLE_GENAI_USE_VERTEXAI:
+        from vertex_client import create_vertex_client
+        return create_vertex_client(settings)
+
     if not settings.GOOGLE_API_KEY or not settings.GOOGLE_API_KEY.strip():
         raise RuntimeError(
             "Gemini is not configured. Set a non-empty GOOGLE_API_KEY in backend/.env "
