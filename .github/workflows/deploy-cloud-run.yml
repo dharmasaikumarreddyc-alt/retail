@@ -1,0 +1,240 @@
+name: Deploy Loopora to Cloud Run
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: loopora-production-deploy
+  cancel-in-progress: true
+
+env:
+  GCP_PROJECT_ID: project-08a199a1-b3a6-4e7d-b5f
+  GCP_PROJECT_NUMBER: "106222300318"
+  FRONTEND_SERVICE: loopora-web
+  FRONTEND_REGION: asia-south1
+  ARTIFACT_REGION: us-central1
+  ARTIFACT_REPOSITORY: retail
+  FRONTEND_IMAGE_NAME: aisle-web
+
+jobs:
+  deploy:
+    name: Build and deploy production
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+
+      - name: Verify Google Cloud federation settings
+        shell: bash
+        env:
+          WIF_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          DEPLOY_SERVICE_ACCOUNT: ${{ vars.GCP_SERVICE_ACCOUNT }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${WIF_PROVIDER}" || -z "${DEPLOY_SERVICE_ACCOUNT}" ]]; then
+            echo "Google Cloud OIDC is not connected yet."
+            echo "Create these GitHub repository variables once:"
+            echo "  GCP_WORKLOAD_IDENTITY_PROVIDER"
+            echo "  GCP_SERVICE_ACCOUNT"
+            echo "After that, every push to main will deploy automatically."
+            exit 1
+          fi
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+          project_id: ${{ env.GCP_PROJECT_ID }}
+
+      - name: Install gcloud
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+
+      - name: Confirm project and required APIs
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud config set project "${GCP_PROJECT_ID}"
+          echo "Project: $(gcloud config get-value project)"
+          for api in run.googleapis.com cloudbuild.googleapis.com artifactregistry.googleapis.com speech.googleapis.com; do
+            state="$(gcloud services list --enabled --filter="config.name=${api}" --format='value(config.name)' || true)"
+            if [[ "${state}" != "${api}" ]]; then
+              echo "Required API is not enabled: ${api}"
+              echo "Enable it once in Google Cloud, then rerun this workflow."
+              exit 1
+            fi
+          done
+
+      - name: Detect existing backend service
+        id: backend
+        shell: bash
+        env:
+          BACKEND_SERVICE_OVERRIDE: ${{ vars.GCP_BACKEND_SERVICE }}
+          BACKEND_REGION_OVERRIDE: ${{ vars.GCP_BACKEND_REGION }}
+        run: |
+          set -euo pipefail
+
+          if [[ -n "${BACKEND_SERVICE_OVERRIDE}" ]]; then
+            BACKEND_SERVICE="${BACKEND_SERVICE_OVERRIDE}"
+            if [[ -n "${BACKEND_REGION_OVERRIDE}" ]]; then
+              BACKEND_REGION="${BACKEND_REGION_OVERRIDE}"
+            else
+              BACKEND_REGION="$(gcloud run services list --platform=managed --filter="metadata.name=${BACKEND_SERVICE}" --format='value(metadata.labels.cloud.googleapis.com/location)' | head -n1)"
+            fi
+          else
+            BACKEND_INFO="$(gcloud run services list --platform=managed --format=json | python3 -c '
+import json, sys
+services = json.load(sys.stdin)
+preferred = ["loopora-api", "aisle-api"]
+for wanted in preferred:
+    for service in services:
+        metadata = service.get("metadata", {})
+        if metadata.get("name") == wanted:
+            labels = metadata.get("labels", {})
+            print(wanted + "|" + labels.get("cloud.googleapis.com/location", ""))
+            raise SystemExit
+for service in services:
+    metadata = service.get("metadata", {})
+    name = metadata.get("name", "")
+    if name != "loopora-web" and ("api" in name.lower() or "backend" in name.lower()):
+        labels = metadata.get("labels", {})
+        print(name + "|" + labels.get("cloud.googleapis.com/location", ""))
+        raise SystemExit
+')"
+            BACKEND_SERVICE="${BACKEND_INFO%%|*}"
+            BACKEND_REGION="${BACKEND_INFO#*|}"
+          fi
+
+          if [[ -z "${BACKEND_SERVICE}" || -z "${BACKEND_REGION}" ]]; then
+            echo "Could not detect the existing backend Cloud Run service."
+            echo "Set GCP_BACKEND_SERVICE and optionally GCP_BACKEND_REGION as repository variables."
+            gcloud run services list --platform=managed
+            exit 1
+          fi
+
+          echo "service=${BACKEND_SERVICE}" >> "$GITHUB_OUTPUT"
+          echo "region=${BACKEND_REGION}" >> "$GITHUB_OUTPUT"
+          echo "Backend service: ${BACKEND_SERVICE} (${BACKEND_REGION})"
+
+      - name: Validate backend Python
+        shell: bash
+        run: python3 -m compileall -q backend
+
+      - name: Deploy backend
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud run deploy "${{ steps.backend.outputs.service }}" \
+            --source backend \
+            --region "${{ steps.backend.outputs.region }}" \
+            --project "${GCP_PROJECT_ID}" \
+            --quiet
+
+      - name: Read backend URL
+        id: backend_url
+        shell: bash
+        run: |
+          set -euo pipefail
+          BACKEND_URL="$(gcloud run services describe "${{ steps.backend.outputs.service }}" \
+            --region "${{ steps.backend.outputs.region }}" \
+            --project "${GCP_PROJECT_ID}" \
+            --format='value(status.url)')"
+          if [[ -z "${BACKEND_URL}" ]]; then
+            echo "Backend URL was not returned after deployment."
+            exit 1
+          fi
+          echo "url=${BACKEND_URL}" >> "$GITHUB_OUTPUT"
+          echo "Backend URL: ${BACKEND_URL}"
+
+      - name: Validate frontend production build
+        shell: bash
+        env:
+          NEXT_PUBLIC_BACKEND_URL: ${{ steps.backend_url.outputs.url }}
+        run: |
+          set -euo pipefail
+          npm ci
+          npm run build
+
+      - name: Ensure Artifact Registry repository exists
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! gcloud artifacts repositories describe "${ARTIFACT_REPOSITORY}" \
+              --location "${ARTIFACT_REGION}" \
+              --project "${GCP_PROJECT_ID}" >/dev/null 2>&1; then
+            echo "Artifact Registry repository ${ARTIFACT_REPOSITORY} does not exist."
+            echo "Create it once in Google Cloud or grant this deploy identity permission to create it."
+            exit 1
+          fi
+
+      - name: Build frontend image with backend URL
+        shell: bash
+        run: |
+          set -euo pipefail
+          IMAGE="${ARTIFACT_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/${ARTIFACT_REPOSITORY}/${FRONTEND_IMAGE_NAME}:${GITHUB_SHA}"
+          echo "IMAGE=${IMAGE}" >> "$GITHUB_ENV"
+          gcloud builds submit \
+            --project "${GCP_PROJECT_ID}" \
+            --config cloudbuild.frontend.yaml \
+            --substitutions="_BACKEND_URL=${{ steps.backend_url.outputs.url }},_IMAGE=${IMAGE}" \
+            .
+
+      - name: Deploy frontend
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud run deploy "${FRONTEND_SERVICE}" \
+            --image "${IMAGE}" \
+            --region "${FRONTEND_REGION}" \
+            --project "${GCP_PROJECT_ID}" \
+            --quiet
+
+          gcloud run services update-traffic "${FRONTEND_SERVICE}" \
+            --region "${FRONTEND_REGION}" \
+            --project "${GCP_PROJECT_ID}" \
+            --to-latest \
+            --quiet
+
+      - name: Verify deployment
+        shell: bash
+        run: |
+          set -euo pipefail
+          FRONTEND_URL="$(gcloud run services describe "${FRONTEND_SERVICE}" \
+            --region "${FRONTEND_REGION}" \
+            --project "${GCP_PROJECT_ID}" \
+            --format='value(status.url)')"
+          FRONTEND_REVISION="$(gcloud run services describe "${FRONTEND_SERVICE}" \
+            --region "${FRONTEND_REGION}" \
+            --project "${GCP_PROJECT_ID}" \
+            --format='value(status.latestReadyRevisionName)')"
+          BACKEND_REVISION="$(gcloud run services describe "${{ steps.backend.outputs.service }}" \
+            --region "${{ steps.backend.outputs.region }}" \
+            --project "${GCP_PROJECT_ID}" \
+            --format='value(status.latestReadyRevisionName)')"
+
+          echo "Frontend URL: ${FRONTEND_URL}"
+          echo "Frontend revision: ${FRONTEND_REVISION}"
+          echo "Backend URL: ${{ steps.backend_url.outputs.url }}"
+          echo "Backend revision: ${BACKEND_REVISION}"
+
+          curl --fail --silent --show-error --retry 5 --retry-delay 3 "${FRONTEND_URL}/" >/dev/null
+          curl --fail --silent --show-error --retry 5 --retry-delay 3 "${FRONTEND_URL}/login" >/dev/null
+          curl --fail --silent --show-error --retry 5 --retry-delay 3 "${FRONTEND_URL}/merchant/login" >/dev/null
+
+          {
+            echo "### Loopora deployment"
+            echo "- Frontend: ${FRONTEND_URL}"
+            echo "- Frontend revision: ${FRONTEND_REVISION}"
+            echo "- Backend: ${{ steps.backend_url.outputs.url }}"
+            echo "- Backend revision: ${BACKEND_REVISION}"
+          } >> "$GITHUB_STEP_SUMMARY"
