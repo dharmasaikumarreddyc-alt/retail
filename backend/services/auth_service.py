@@ -10,6 +10,9 @@ from fastapi import HTTPException, status
 
 from config import settings
 from database.models import UserDB, SpendingRulesDB
+from services.demo_customer_service import ensure_demo_customer_data
+
+DEMO_CUSTOMER_EMAIL = "customer@loopora.demo"
 
 
 class AuthService:
@@ -61,7 +64,6 @@ class AuthService:
         password: str
     ) -> UserDB:
         """Create a new user."""
-        # Check if user exists
         normalized_email = email.strip().lower()
         result = await db.execute(select(UserDB).where(UserDB.email == normalized_email))
         if result.scalar_one_or_none():
@@ -70,7 +72,6 @@ class AuthService:
                 detail="Email already registered"
             )
 
-        # Create user
         hashed_password = AuthService.get_password_hash(password)
         user = UserDB(
             email=normalized_email,
@@ -80,7 +81,6 @@ class AuthService:
         db.add(user)
         await db.flush()
 
-        # Create default spending rules
         default_rules = SpendingRulesDB(
             user_id=user.id,
             monthly_budget=25000.0,
@@ -103,6 +103,8 @@ class AuthService:
 
         await db.commit()
         await db.refresh(user)
+        if normalized_email == DEMO_CUSTOMER_EMAIL:
+            await ensure_demo_customer_data(db, user.id)
         return user
 
     @staticmethod
@@ -120,6 +122,8 @@ class AuthService:
             return None
         if not AuthService.verify_password(password, user.password_hash):
             return None
+        if normalized_email == DEMO_CUSTOMER_EMAIL:
+            await ensure_demo_customer_data(db, user.id)
         return user
 
     @staticmethod
@@ -131,5 +135,9 @@ class AuthService:
     @staticmethod
     async def get_user_by_email(db: AsyncSession, email: str) -> Optional[UserDB]:
         """Get user by email."""
-        result = await db.execute(select(UserDB).where(UserDB.email == email))
-        return result.scalar_one_or_none()
+        normalized_email = email.strip().lower()
+        result = await db.execute(select(UserDB).where(UserDB.email == normalized_email))
+        user = result.scalar_one_or_none()
+        if user and normalized_email == DEMO_CUSTOMER_EMAIL:
+            await ensure_demo_customer_data(db, user.id)
+        return user
