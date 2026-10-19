@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { backendUrl } from '../lib/backend';
@@ -9,6 +9,11 @@ import { saveAuthenticatedToken } from '../lib/auth';
 const DEMO_EMAIL = 'customer@loopora.demo';
 const DEMO_PASSWORD = 'LooporaDemo123!';
 
+function safeNextPath(value: string | null): string {
+  if (!value || !value.startsWith('/') || value.startsWith('//')) return '/shop';
+  return value;
+}
+
 export default function LoginClient() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -16,7 +21,28 @@ export default function LoginClient() {
   const [rememberMe, setRememberMe] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [loginRequired, setLoginRequired] = useState(false);
+  const [nextPath, setNextPath] = useState('/shop');
   const router = useRouter();
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const required = params.get('required') === 'cart-pilot';
+    setLoginRequired(required);
+    setNextPath(safeNextPath(params.get('next')));
+
+    if (required && 'speechSynthesis' in window) {
+      try {
+        window.speechSynthesis.cancel();
+        const utterance = new SpeechSynthesisUtterance('Please login to continue.');
+        utterance.lang = 'en-IN';
+        utterance.rate = 1;
+        window.speechSynthesis.speak(utterance);
+      } catch {
+        // The visible login message remains available if autoplay speech is blocked.
+      }
+    }
+  }, []);
 
   const loadDemoCredentials = () => {
     setEmail(DEMO_EMAIL);
@@ -49,7 +75,7 @@ export default function LoginClient() {
         }
         saveAuthenticatedToken('customer', data.access_token, rememberMe);
         window.dispatchEvent(new Event('authChanged'));
-        router.push('/shop');
+        router.push(nextPath);
       } else {
         const errorData = await response.json();
         setError(errorData.detail || 'Invalid email or password');
@@ -66,6 +92,14 @@ export default function LoginClient() {
     <div className="login-area">
       <h2 className="text-secondary text-center">Customer Login</h2>
       <p className="text-center m-b20">Sign in to shop, use CartPilot, and manage orders.</p>
+
+      {loginRequired && (
+        <div className="alert alert-info text-center" role="alert" aria-live="polite">
+          <i className="fas fa-lock me-2" aria-hidden="true" />
+          <strong>Please login to continue.</strong>
+          <div className="small mt-1">CartPilot voice ordering requires a customer account.</div>
+        </div>
+      )}
 
       <button type="button" className="btn btn-outline-secondary w-100 mb-4" onClick={loadDemoCredentials}>
         <i className="fas fa-wand-magic-sparkles me-2" /> Load customer demo credentials
