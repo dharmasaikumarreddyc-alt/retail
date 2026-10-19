@@ -86,8 +86,33 @@ export default function MerchantLoginClient() {
           <h2 id="merchant-login-title">Sign in to your store</h2>
           <p className="merchant-login-card-copy">Use your merchant account or load the public demo credentials below.</p>
 
-          <button type="button" className="merchant-login-submit mb-3" onClick={loadDemoCredentials} style={{ background: '#fff', color: '#151f37', border: '1px solid #dfe3e8' }}>
-            Load merchant demo credentials <i className="fas fa-wand-magic-sparkles" />
+          <button
+            type="button"
+            onClick={loadDemoCredentials}
+            aria-label="Load merchant demo credentials"
+            style={{
+              width: '100%',
+              minHeight: '54px',
+              margin: '0 0 18px',
+              padding: '14px 18px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '10px',
+              borderRadius: '12px',
+              border: '2px solid #197a52',
+              background: '#f0f8f3',
+              color: '#145a3e',
+              WebkitTextFillColor: '#145a3e',
+              fontSize: '15px',
+              fontWeight: 800,
+              lineHeight: 1.2,
+              cursor: 'pointer',
+              appearance: 'none',
+            }}
+          >
+            <i className="fas fa-wand-magic-sparkles" aria-hidden="true" style={{ color: '#197a52', WebkitTextFillColor: '#197a52' }} />
+            <span style={{ color: '#145a3e', WebkitTextFillColor: '#145a3e' }}>Load merchant demo credentials</span>
           </button>
 
           {error && <div className="merchant-login-error" role="alert"><i className="fas fa-circle-exclamation" />{error}</div>}
