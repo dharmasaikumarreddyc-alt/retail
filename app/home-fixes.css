@@ -1,0 +1,54 @@
+/* Home-page hero alignment fixes.
+   Keep the template's artwork centered inside its responsive column and prevent
+   parallax offsets from pushing the main coffee image outside the viewport. */
+.main-slider.style-2,
+.main-slider.style-2 .main-swiper2 {
+  max-width: 100%;
+  overflow-x: clip;
+}
+
+.main-slider.style-2 .banner-media {
+  width: 100%;
+  max-width: 100%;
+  margin-inline: auto;
+}
+
+.main-slider.style-2 .banner-media .img-preview {
+  position: relative !important;
+  inset: auto !important;
+  left: auto !important;
+  right: auto !important;
+  transform: none !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  margin: 0 auto !important;
+  display: flex !important;
+  align-items: center;
+  justify-content: center;
+}
+
+.main-slider.style-2 .banner-media .img-preview img {
+  display: block !important;
+  width: min(100%, 560px) !important;
+  max-width: 100% !important;
+  height: auto !important;
+  margin: 0 auto !important;
+  object-fit: contain;
+  object-position: center center;
+}
+
+@media (max-width: 991px) {
+  .main-slider.style-2 .banner-media {
+    margin-top: 24px;
+  }
+
+  .main-slider.style-2 .banner-media .img-preview img {
+    width: min(88vw, 520px) !important;
+  }
+}
+
+@media (max-width: 575px) {
+  .main-slider.style-2 .banner-media .img-preview img {
+    width: min(92vw, 430px) !important;
+  }
+}
