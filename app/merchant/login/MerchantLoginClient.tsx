@@ -6,6 +6,9 @@ import { useRouter } from 'next/navigation';
 import { backendUrl } from '../../lib/backend';
 import { saveAuthenticatedToken } from '../../lib/auth';
 
+const DEMO_EMAIL = 'merchant@loopora.demo';
+const DEMO_PASSWORD = 'LooporaMerchant123!';
+
 export default function MerchantLoginClient() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -13,6 +16,12 @@ export default function MerchantLoginClient() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const router = useRouter();
+
+  const loadDemoCredentials = () => {
+    setEmail(DEMO_EMAIL);
+    setPassword(DEMO_PASSWORD);
+    setError('');
+  };
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -34,9 +43,7 @@ export default function MerchantLoginClient() {
       });
       const profile = await profileResponse.json();
       if (!profileResponse.ok) throw new Error(profile.detail || 'Could not verify this account.');
-      if (profile.role !== 'merchant' || !profile.merchant_id) {
-        throw new Error('That is a customer account. Use the customer sign-in instead.');
-      }
+      if (profile.role !== 'merchant' || !profile.merchant_id) throw new Error('That is a customer account. Use customer sign-in instead.');
 
       saveAuthenticatedToken('merchant', login.access_token);
       window.dispatchEvent(new Event('authChanged'));
@@ -51,9 +58,7 @@ export default function MerchantLoginClient() {
   return (
     <main className="merchant-login-root">
       <header className="merchant-login-topbar">
-        <Link className="merchant-brand" href="/merchant">
-          <img className="merchant-brand-logo" src="/images/logo.svg" alt="Loopora" />
-        </Link>
+        <Link className="merchant-brand" href="/merchant"><img className="merchant-brand-logo" src="/images/logo.svg" alt="Loopora" /></Link>
         <Link className="merchant-login-customer-link" href="/login">Customer sign in <i className="fas fa-arrow-up-right-from-square" /></Link>
       </header>
 
@@ -79,7 +84,11 @@ export default function MerchantLoginClient() {
           <div className="merchant-login-card-icon"><i className="fas fa-store" /></div>
           <p className="merchant-eyebrow">MERCHANT PORTAL</p>
           <h2 id="merchant-login-title">Sign in to your store</h2>
-          <p className="merchant-login-card-copy">Use the email and password provided for your merchant account.</p>
+          <p className="merchant-login-card-copy">Use your merchant account or load the public demo credentials below.</p>
+
+          <button type="button" className="merchant-login-submit mb-3" onClick={loadDemoCredentials} style={{ background: '#fff', color: '#151f37', border: '1px solid #dfe3e8' }}>
+            Load merchant demo credentials <i className="fas fa-wand-magic-sparkles" />
+          </button>
 
           {error && <div className="merchant-login-error" role="alert"><i className="fas fa-circle-exclamation" />{error}</div>}
 
@@ -104,7 +113,7 @@ export default function MerchantLoginClient() {
               {!loading && <i className="fas fa-arrow-right" />}
             </button>
           </form>
-          <p className="merchant-login-footnote"><i className="fas fa-shield-halved" /> Merchant accounts are separate from customer accounts.</p>
+          <p className="merchant-login-footnote"><i className="fas fa-shield-halved" /> Demo access is limited to the demo merchant workspace.</p>
         </section>
       </div>
 
