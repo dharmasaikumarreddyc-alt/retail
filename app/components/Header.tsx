@@ -103,7 +103,7 @@ export default function Header() {
           </Link>
 
           <nav className="loopora-desktop-nav" aria-label="Primary navigation">
-            {navLinks.map(link => {
+            {navLinks.filter(link => !link.featured).map(link => {
               const active = link.href === '/' ? pathname === '/' : pathname.startsWith(link.href);
               return (
                 <Link
@@ -122,6 +122,10 @@ export default function Header() {
           </nav>
 
           <div className="loopora-actions">
+            <Link href="/cart-pilot" className="cartpilot-button" aria-current={pathname.startsWith('/cart-pilot') ? 'page' : undefined}>
+              <i className="fas fa-robot" aria-hidden="true" />
+              <span>CartPilot</span>
+            </Link>
             <Link href="/cart" className="icon-action" aria-label={`Cart with ${cartCount} items`} title="Cart">
               <i className="fas fa-shopping-cart" />
               {cartCount > 0 && <span className="cart-badge">{cartCount > 99 ? '99+' : cartCount}</span>}
@@ -217,6 +221,7 @@ export default function Header() {
         .loopora-nav-shell{width:min(1180px,calc(100% - 32px));min-height:76px;margin:0 auto;display:flex;align-items:center;gap:28px}
         .loopora-brand{display:flex;align-items:center;flex:0 0 auto}.loopora-brand img{display:block;width:150px;max-height:48px;object-fit:contain}
         .loopora-desktop-nav{display:flex;align-items:center;gap:8px;margin-left:auto}.loopora-header .nav-link{width:42px;height:42px;padding:0;border-radius:50%;color:#1b2436;font-size:16px;text-decoration:none;display:grid;place-items:center;transition:background .16s ease,color .16s ease,transform .16s ease}.loopora-header .nav-link:hover,.loopora-header .nav-link.active{background:#f0f3f6;color:#e95e35;transform:translateY(-1px)}.loopora-header .nav-link.featured{background:#151f37;color:#fff}.loopora-header .nav-link.featured:hover,.loopora-header .nav-link.featured.active{background:#273554;color:#fff}
+        .cartpilot-button{height:42px;padding:0 15px;display:inline-flex;align-items:center;justify-content:center;gap:8px;flex-shrink:0;border-radius:999px;background:#151f37;color:#fff!important;font-size:14px;font-weight:700;white-space:nowrap;text-decoration:none}.cartpilot-button:hover,.cartpilot-button[aria-current="page"]{background:#273554}
         .loopora-actions{display:flex;align-items:center;gap:10px}.icon-action{position:relative;width:42px;height:42px;border-radius:50%;display:grid;place-items:center;color:#151f37;background:#f5f6f8;text-decoration:none}.cart-badge{position:absolute;right:-3px;top:-4px;min-width:19px;height:19px;padding:0 5px;border-radius:10px;display:grid;place-items:center;background:#ef653f;color:#fff;font-size:11px;font-weight:800}
         .login-button,.account-button{height:42px;border-radius:999px;padding:0 17px;display:flex;align-items:center;gap:8px;border:1px solid #e3e6eb;background:#fff;color:#151f37;text-decoration:none;font-weight:700}.account-button{cursor:pointer}.small-chevron{font-size:10px}.profile-wrap{position:relative}.profile-menu{position:absolute;right:0;top:50px;width:190px;padding:8px;background:#fff;border:1px solid #e8e9ed;border-radius:14px;box-shadow:0 18px 44px rgba(21,31,55,.15);display:grid}.profile-menu a,.profile-menu button{padding:10px 12px;border:0;border-radius:9px;background:transparent;color:#20283a;text-align:left;text-decoration:none}.profile-menu a:hover,.profile-menu button:hover{background:#f5f6f8}
         .mobile-toggle{display:none;width:42px;height:42px;border:0;border-radius:10px;background:#151f37;padding:10px;cursor:pointer}.mobile-toggle span{display:block;height:2px;background:#fff;margin:4px 0;border-radius:2px}
@@ -225,7 +230,7 @@ export default function Header() {
         .drawer-top{display:flex;align-items:center;justify-content:space-between;gap:20px;padding-bottom:20px;border-bottom:1px solid #edf0f3}.drawer-close{width:42px;height:42px;border:0;border-radius:50%;background:#f3f5f7;color:#151f37}
         .drawer-heading{margin:22px 4px 10px;color:#78847d;font-size:11px;font-weight:800;letter-spacing:.12em;text-transform:uppercase}.drawer-links{display:grid;gap:9px;padding:0}.drawer-link{min-width:0;min-height:58px;padding:10px 13px;border:1px solid #e7e9e3;border-radius:14px;color:#172820;text-decoration:none;display:flex;align-items:center;gap:12px;background:#f8faf8;transition:background .16s ease,border-color .16s ease,transform .16s ease}.drawer-link:hover,.drawer-link.active{background:#edf6f0;border-color:#a7ccb3;transform:translateX(-2px)}.drawer-link-icon{width:38px;height:38px;border-radius:11px;display:grid;place-items:center;flex:0 0 auto;background:#eaf2ec;color:#176b4b}.drawer-link-copy{min-width:0;display:grid;gap:2px}.drawer-link-copy strong{font-size:15px;line-height:1.2}.drawer-link-copy small{font-size:11px;line-height:1.35;font-weight:500;opacity:.76}.drawer-chevron{margin-left:auto;font-size:11px;opacity:.55}.drawer-link.cartpilot{min-height:70px;background:#172820;border-color:#172820;color:#fff}.drawer-link.cartpilot:hover,.drawer-link.cartpilot.active{background:#104e38;border-color:#104e38}.drawer-link.cartpilot .drawer-link-icon{background:rgba(255,255,255,.14);color:#fff}.drawer-actions{display:grid;gap:10px;margin-top:auto;padding-top:22px}.drawer-primary,.drawer-secondary{min-height:50px;border-radius:12px;display:flex;align-items:center;justify-content:center;gap:9px;text-decoration:none;font-weight:800}.drawer-primary{border:0;background:#ef653f;color:#fff}.drawer-secondary{border:1px solid #dfe3e8;background:#fff;color:#151f37}
         @media(max-width:991px){.loopora-nav-shell{width:min(100% - 24px,760px);min-height:68px;gap:14px}.loopora-brand img{width:132px}.loopora-desktop-nav{display:none}.mobile-toggle{display:block}.account-name{display:none}.login-button{display:none}.loopora-actions{margin-left:auto}}
-        @media(max-width:480px){.loopora-nav-shell{width:calc(100% - 20px)}.loopora-brand img{width:116px}.icon-action{width:40px;height:40px}.account-button{width:40px;padding:0;justify-content:center}.account-button .small-chevron{display:none}.mobile-toggle{width:40px;height:40px}.mobile-drawer{width:92vw;padding:18px}.drawer-links{gap:7px}}
+        @media(max-width:480px){.loopora-nav-shell{gap:10px}.loopora-actions{gap:6px}.cartpilot-button{height:40px;padding:0 10px;gap:6px;font-size:12px}.loopora-nav-shell{width:calc(100% - 20px)}.loopora-brand img{width:96px}.icon-action{width:40px;height:40px}.account-button{width:40px;padding:0;justify-content:center}.account-button .small-chevron{display:none}.mobile-toggle{width:40px;height:40px}.mobile-drawer{width:92vw;padding:18px}.drawer-links{gap:7px}}
       `}</style>
     </>
   );

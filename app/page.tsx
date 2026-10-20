@@ -4,6 +4,7 @@ import Footer from './components/Footer';
 import Preloader from './components/Preloader';
 import PopularProducts from './components/PopularProducts';
 import Link from 'next/link';
+import Image from 'next/image';
 
 export const metadata: Metadata = {
   title: 'Agentic AI Checkout | Home',
@@ -47,7 +48,7 @@ export default function Home() {
 									<div className="border-shap2"></div>
 
 									<div className="img-preview" data-swiper-parallax="-100">
-										<img src="/images/main-slider/slider2/coffee-splash.png" alt="banner-media" />
+										<Image src="/images/main-slider/slider2/coffee-splash.png" alt="Coffee cup with a splash of coffee and floating coffee beans" width={5302} height={6600} sizes="(max-width: 991px) 90vw, 470px" loading="eager" fetchPriority="high" />
 									</div>
 									<div className="bnr-content-bx slideskew">
 										<div className="dz-media">
