@@ -397,6 +397,8 @@ export default function CartPilotClient() {
     micError,
     interim,
     clearMicError,
+    getMicError,
+    prepareMicrophone,
     unlockAudio,
     speak,
     stopSpeaking,
@@ -1226,6 +1228,11 @@ export default function CartPilotClient() {
     setAssistantActive(true);
 
     try {
+      if (!(await prepareMicrophone())) {
+        stopAssistant();
+        return;
+      }
+      if (!assistantActiveRef.current) { stopListening(); return; }
       let firstTurn = true;
 
       while (assistantActiveRef.current) {
@@ -1238,11 +1245,12 @@ export default function CartPilotClient() {
           request = await ask(prompt);
           if (!assistantActiveRef.current) break;
           if (!request) {
-            if (micError === 'not-allowed' || micError === 'service-not-allowed') {
+            const currentMicError = getMicError();
+            if (currentMicError === 'not-allowed' || currentMicError === 'service-not-allowed') {
               await say(
-                micError === 'not-allowed'
-                  ? 'I need microphone access. Allow the mic from the lock icon in the address bar, then start me again.'
-                  : 'Online speech recognition is off. Turn it on in Windows Settings, Privacy, Speech, then start me again.'
+                currentMicError === 'not-allowed'
+                  ? 'Please allow microphone access in your browser website settings, then start me again.'
+                  : 'Speech recognition is unavailable in this browser. Open this page in Safari on iPhone, or try typing your request.'
               );
               stopAssistant();
               return;
@@ -1859,24 +1867,28 @@ export default function CartPilotClient() {
                           )}
                           <div className="small text-muted mt-2">
                             {assistantActive
-                              ? 'Listening… speak anytime. Say “stop” or tap Stop to end.'
+                              ? (listening ? 'Listening… speak now. Say “stop” or tap Stop to end.' : speaking ? 'Assistant is speaking… wait for “Listening” to answer.' : 'Preparing your microphone or understanding your answer…')
                               : <>Hands-free — stays on until you stop. Try <em>“Hey, can I get a coffee?”</em></>}
                           </div>
                           {micError && (
                             <div className="alert alert-warning mt-3 mb-0 small" role="alert">
                               <i className="fas fa-microphone-slash me-2"></i>
                               {micError === 'not-allowed'
-                                ? 'Microphone is blocked. Click the lock icon in the address bar → allow Microphone → reload.'
+                                ? 'Microphone is blocked. On iPhone, open this page in Safari, allow Microphone in the page’s website settings, then reload. Also check microphone permission for the browser app in iOS Settings.'
                                 : micError === 'service-not-allowed'
-                                ? 'Windows online speech recognition is off. Enable it in Settings → Privacy & security → Speech.'
-                                : `Voice input issue: ${micError}.`}
+                                ? 'Browser speech recognition is unavailable. On iPhone, try opening the page directly in Safari and allow microphone access.'
+                                : micError === 'transcription-unavailable'
+                                ? 'Audio was recorded, but transcription failed. Try Test mic again or type your request.'
+                                : micError === 'microphone-unavailable'
+                                ? 'The microphone is unavailable. Close other apps using it and try again in Safari.'
+                                : `Voice input issue: ${micError}. Try Test mic again or type your request.`}
                             </div>
                           )}
                         </div>
                       ) : (
                         <div className="alert alert-info small mb-4">
                           <i className="fas fa-info-circle me-2"></i>
-                          Voice isn’t available in this browser. Use Chrome or Edge for the voice assistant — or just type your request below.
+                          Voice isn’t available in this browser. On iPhone, open this page directly in Safari and allow microphone access, or type your request below.
                         </div>
                       )}
 
@@ -1909,7 +1921,7 @@ export default function CartPilotClient() {
                                 clearMicError();
                                 setDiag('Listening… say something now.');
                                 const t = await listen(8000);
-                                setDiag(t ? `Heard: “${t}”` : 'Heard nothing (check mic permission / Windows speech).');
+                                setDiag(t ? `Heard: “${t}”` : getMicError() ? `Voice input issue: ${getMicError()}. Check the message above.` : 'No words detected. Wait for Listening, then speak clearly and try again.');
                               }}
                             >
                               <i className="fas fa-microphone me-1"></i>2. Test mic
@@ -1917,8 +1929,7 @@ export default function CartPilotClient() {
                           </div>
                           {diag && <div className="text-muted">{diag}</div>}
                           <div className="text-muted mt-2" style={{ fontSize: '0.78rem' }}>
-                            Tip: voice needs Chrome/Edge, mic permission allowed for this site, and (on Windows/Edge)
-                            “Online speech recognition” ON in Settings → Privacy → Speech.
+                            On iPhone, open Loopora directly in Safari, allow microphone access, keep the page open, and wait for “Listening” before speaking. In-app browsers may restrict microphone access.
                           </div>
                         </div>
                       </details>

@@ -71,7 +71,12 @@ export function useVoice(lang = 'en-IN') {
   const [sttSupported, setSttSupported] = useState(false);
   const [listening, setListening] = useState(false);
   const [speaking, setSpeaking] = useState(false);
-  const [micError, setMicError] = useState<string>('');
+  const [micError, setMicErrorState] = useState<string>('');
+  const micErrorRef = useRef('');
+  const setMicError = useCallback((value: string) => {
+    micErrorRef.current = value;
+    setMicErrorState(value);
+  }, []);
   const [interim, setInterim] = useState<string>('');
 
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
@@ -137,6 +142,23 @@ export function useVoice(lang = 'en-IN') {
       /* ignore */
     }
   }, []);
+
+  // Acquire permission directly from the Start tap, before the spoken greeting.
+  const prepareMicrophone = useCallback(async (): Promise<boolean> => {
+    if (!navigator.mediaDevices?.getUserMedia) return Boolean(getRecognitionCtor());
+    try {
+      if (!mediaStreamRef.current?.getAudioTracks().some(track => track.readyState === 'live')) {
+        mediaStreamRef.current = await navigator.mediaDevices.getUserMedia({
+          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 },
+        });
+      }
+      setMicError('');
+      return true;
+    } catch (error) {
+      setMicError(error instanceof DOMException && error.name === 'NotAllowedError' ? 'not-allowed' : 'microphone-unavailable');
+      return false;
+    }
+  }, [setMicError]);
 
   const speak = useCallback(
     (text: string): Promise<void> =>
@@ -269,7 +291,9 @@ export function useVoice(lang = 'en-IN') {
 
       try {
         if ('speechSynthesis' in window) window.speechSynthesis.cancel();
-        stream = await navigator.mediaDevices.getUserMedia({
+        stream = mediaStreamRef.current?.getAudioTracks().some(track => track.readyState === 'live')
+          ? mediaStreamRef.current
+          : await navigator.mediaDevices.getUserMedia({
           audio: {
             echoCancellation: true,
             noiseSuppression: true,
@@ -284,7 +308,8 @@ export function useVoice(lang = 'en-IN') {
         mediaRecorderRef.current = recorder;
         const chunks: Blob[] = [];
 
-        const recorded = new Promise<Blob>((resolve) => {
+        const recorded = new Promise<Blob>((resolve, reject) => {
+          recorder.onerror = () => reject(new Error('Audio recording failed.'));
           recorder.ondataavailable = (event) => {
             if (event.data?.size) chunks.push(event.data);
           };
@@ -305,7 +330,9 @@ export function useVoice(lang = 'en-IN') {
 
         setListening(true);
         setInterim('Listening…');
-        recorder.start(200);
+        recorder.start();
+        // Arm this before touching Web Audio: iOS can leave resume() pending.
+        hardStopTimer = setTimeout(stopRecorder, Math.min(timeoutMs, 12000));
 
         // Single-mic design: MediaRecorder captures the audio and this Web Audio
         // analyser reads the SAME stream for end-of-speech detection. We never run
@@ -317,7 +344,7 @@ export function useVoice(lang = 'en-IN') {
           audioContextRef.current = audioContext;
         }
         if (audioContext) {
-          try { await audioContext.resume(); } catch { /* context was already unlocked if iOS requires it */ }
+          void audioContext.resume().catch(() => { /* timed recording still works if Web Audio stays suspended */ });
           source = audioContext.createMediaStreamSource(stream);
           analyser = audioContext.createAnalyser();
           analyser.fftSize = 1024;
@@ -358,7 +385,6 @@ export function useVoice(lang = 'en-IN') {
           vadFrameRef.current = requestAnimationFrame(checkVoice);
         }
 
-        hardStopTimer = setTimeout(stopRecorder, Math.min(timeoutMs, 8000));
         const blob = await recorded;
 
         stream.getTracks().forEach((track) => track.stop());
@@ -381,6 +407,7 @@ export function useVoice(lang = 'en-IN') {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ audio, language: lang, mimeType: blob.type }),
+          signal: AbortSignal.timeout(20000),
         });
         const data = await response.json().catch(() => ({}));
         setInterim('');
@@ -394,8 +421,11 @@ export function useVoice(lang = 'en-IN') {
           return '';
         }
 
-        return '';
+        setMicError('transcription-unavailable');
+        return data?.fallback === true ? null : '';
       } catch (error) {
+        try { if (mediaRecorderRef.current?.state === 'recording') mediaRecorderRef.current.stop(); } catch { /* ignore */ }
+        try { source?.disconnect(); analyser?.disconnect(); } catch { /* ignore */ }
         stream?.getTracks().forEach((track) => track.stop());
         mediaStreamRef.current = null;
         mediaRecorderRef.current = null;
@@ -409,6 +439,7 @@ export function useVoice(lang = 'en-IN') {
           setMicError('not-allowed');
           return '';
         }
+        setMicError(error instanceof DOMException && error.name === 'NotFoundError' ? 'microphone-unavailable' : 'voice-input-unavailable');
         return null;
       } finally {
         if (hardStopTimer) clearTimeout(hardStopTimer);
@@ -461,6 +492,8 @@ export function useVoice(lang = 'en-IN') {
     micError,
     interim,
     clearMicError: () => setMicError(''),
+    getMicError: () => micErrorRef.current,
+    prepareMicrophone,
     unlockAudio,
     speak,
     stopSpeaking,
