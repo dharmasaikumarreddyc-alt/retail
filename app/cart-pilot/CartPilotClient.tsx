@@ -1048,7 +1048,12 @@ export default function CartPilotClient() {
       if (!pick) {
         const retry = await ask('Which would you like? Tell me the number, or the name.');
         if (!assistantActiveRef.current) return false;
-        pick = parseMerchantChoice(retry, merchants) ?? merchants[0];
+        pick = parseMerchantChoice(retry, merchants);
+        if (!pick) {
+          await say("I didn't catch your choice. Please start again or type your request.");
+          setFlowStep('input');
+          return false;
+        }
       }
       chosen = pick;
     }
@@ -2235,6 +2240,10 @@ export default function CartPilotClient() {
                       </div>
                     </div>
                     <div className="p-3">
+                      <div className="alert alert-info small" role="status">
+                        <strong>Your request:</strong> {userQuery}
+                        <button type="button" className="btn btn-sm btn-outline-secondary ms-2" onClick={() => { stopAssistant(); setFlowStep('input'); }}>Change request</button>
+                      </div>
                       <p className="text-muted">
                         <i className="fas fa-microphone text-primary me-1"></i>
                         Say the number or the name — or tap one.

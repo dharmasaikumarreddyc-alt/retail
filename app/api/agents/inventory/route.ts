@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { searchProducts, getMerchantProducts, merchantsDB, type Product } from '../data';
+import { searchProducts, getMerchantProducts, merchantsDB, hasProductIntent, matchesRequestedProduct, type Product } from '../data';
 import { llmJSON, llmEnabled } from '../llm';
 
 // POST /api/agents/inventory
@@ -171,10 +171,14 @@ export async function POST(request: NextRequest) {
 
     // Use AI first, but strictly post-filter to direct matches. Keyword scoring is the deterministic fallback.
     const ai = await aiSelectProducts(merchantId, merchant.name, normalizedQuery, allMerchantProducts);
-    const deterministic = directFallbackMatches(allMerchantProducts, normalizedQuery);
+    const eligibleProducts = hasProductIntent(normalizedQuery)
+      ? allMerchantProducts.filter(product => matchesRequestedProduct(product, normalizedQuery))
+      : allMerchantProducts;
+    const deterministic = directFallbackMatches(eligibleProducts, normalizedQuery);
     const legacyMatches = deterministic.length ? deterministic : await searchProducts(merchantId, normalizedQuery);
 
-    let products = ai?.products?.length ? ai.products : legacyMatches;
+    const relevantAIProducts = ai?.products.filter(product => !hasProductIntent(normalizedQuery) || matchesRequestedProduct(product, normalizedQuery)) || [];
+    let products = relevantAIProducts.length ? relevantAIProducts : legacyMatches;
 
     // A generic single-item request should result in one item only. The LLM may otherwise over-select related products.
     const explicitMultiItem = /\b(and|plus|with|,|\&)\b/i.test(normalizedQuery) && !isIngredientRequest(normalizedQuery);

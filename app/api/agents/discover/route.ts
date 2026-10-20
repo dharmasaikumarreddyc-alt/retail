@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { searchMerchants, merchantsDB, type Merchant } from '../data';
+import { searchMerchants, merchantsDB, hasProductIntent, type Merchant } from '../data';
 import { llmJSON, llmEnabled } from '../llm';
 
 // POST /api/agents/discover
@@ -68,7 +68,7 @@ async function aiDiscover(
 
   const merchants: Merchant[] = [];
   for (const match of result.matches) {
-    const merchant = merchantsDB.find((m) => m.id === match.id && m.isOpen);
+    const merchant = list.find((m) => m.id === match.id && m.isOpen);
     if (merchant && !merchants.find((x) => x.id === merchant.id)) {
       merchants.push({ ...merchant, aiReason: match.reason } as Merchant & { aiReason: string });
     }
@@ -97,7 +97,9 @@ export async function POST(request: NextRequest) {
     // Deterministic matching is dramatically faster for requests like "coffee" or "biryani".
     const fallbackMerchants = (await searchMerchants(query)).filter((m) => distanceOf(m) <= radius);
     const fastPath = canUseFastPath(query, fallbackMerchants);
-    const ai = fastPath ? null : await aiDiscover(query, withinRadius);
+    // Ranking may reorder relevant candidates, but may not introduce unrelated shops.
+    const eligible = hasProductIntent(query) ? fallbackMerchants : withinRadius;
+    const ai = fastPath ? null : await aiDiscover(query, eligible);
     const merchants = fastPath ? fallbackMerchants : (ai?.merchants ?? fallbackMerchants);
     const usedAI = Boolean(ai);
 

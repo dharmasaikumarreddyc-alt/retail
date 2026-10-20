@@ -47,6 +47,7 @@ jobs:
         run: |
           set -euo pipefail
           npm ci
+          node tests/catalog-regression.cjs
           npm run build
 
       - name: Deploy existing Cloud Run service

@@ -185,80 +185,70 @@ export const localProductsDB: Product[] = [
 // =====================================================
 export const merchantsDB: Merchant[] = localMerchantsDB;
 
-// Search merchants and products from the app's food catalog.
+// Match spoken requests as words: punctuation and conversational filler are not products.
+const SEARCH_FILLER = new Set('i me my a an the please want need get give show find order buy can could would should may you your we us like have some one cup cups of for from near nearby to at in on and plus with something looking thanks thank is it this that now today'.split(' '));
+const PRODUCT_WORDS = new Set('coffee espresso cappuccino latte americano mocha brew tea chai juice smoothie salad bowl toast croissant muffin pancake waffle scone bagel biryani curry paneer naan dosa idli cake pastry donut bread rice'.split(' '));
+
+function words(text: string): string[] {
+  return (text.toLowerCase().match(/[a-z0-9]+/g) || []).map(word =>
+    word.endsWith('ies') ? word.slice(0, -3) + 'y' : word.endsWith('s') && !word.endsWith('ss') ? word.slice(0, -1) : word
+  );
+}
+
+export function catalogRequestTerms(query: string): string[] {
+  return [...new Set(words(query).filter(word => word.length > 1 && !SEARCH_FILLER.has(word)))];
+}
+
+function containsTerm(text: string, terms: string[]): boolean {
+  const tokens = new Set(words(text));
+  return terms.some(term => tokens.has(term));
+}
+
+export function hasProductIntent(query: string): boolean {
+  return catalogRequestTerms(query).some(term => PRODUCT_WORDS.has(term));
+}
+
+export function matchesRequestedProduct(product: Product, query: string): boolean {
+  const terms = catalogRequestTerms(query);
+  const productTerms = terms.filter(term => PRODUCT_WORDS.has(term));
+  return containsTerm(`${product.name} ${product.category} ${product.tags.join(' ')} ${product.description}`, productTerms.length ? productTerms : terms);
+}
+
 export async function searchMerchants(query: string): Promise<Merchant[]> {
-  const keywords = query.trim().toLowerCase().split(/\s+/).filter(word => word.length > 2);
-  if (keywords.length === 0) return [];
-
-  const matchingLocalMerchants = new Set<string>();
-  for (const product of localProductsDB) {
-    const searchableText = `${product.name} ${product.description} ${product.category} ${product.tags.join(' ')}`.toLowerCase();
-    if (keywords.some(keyword => searchableText.includes(keyword))) {
-      matchingLocalMerchants.add(product.merchantId);
-    }
-  }
-
-  return localMerchantsDB
-    .filter(merchant => matchingLocalMerchants.has(merchant.id) || keywords.some(keyword =>
-      merchant.category.some(category => category.includes(keyword)) ||
-      merchant.type.toLowerCase().includes(keyword) ||
-      merchant.name.toLowerCase().includes(keyword)
+  const terms = catalogRequestTerms(query);
+  if (!terms.length) return [];
+  const matchingProducts = new Set(localProductsDB
+    .filter(product => product.inStock && product.quantity > 0 && matchesRequestedProduct(product, query))
+    .map(product => product.merchantId));
+  return localMerchantsDB.filter(merchant => merchant.isOpen && (
+    matchingProducts.has(merchant.id) || (!hasProductIntent(query) && containsTerm(
+      `${merchant.name} ${merchant.type} ${merchant.category.join(' ')}`, terms
     ))
-    .sort((left, right) => parseFloat(left.distance) - parseFloat(right.distance));
+  )).sort((left, right) => parseFloat(left.distance) - parseFloat(right.distance));
 }
 
-// Search products for a specific merchant.
 export async function searchProducts(merchantId: string, query: string): Promise<Product[]> {
-  if (!localMerchantsDB.some(merchant => merchant.id === merchantId)) return [];
-  const keywords = query.trim().toLowerCase().split(/\s+/).filter(word => word.length > 2);
-  const products = localProductsDB.filter(product => product.merchantId === merchantId && product.inStock);
-  if (keywords.length === 0) return products;
-
-  return products.filter(product => {
-    const searchableText = `${product.name} ${product.description} ${product.category} ${product.tags.join(' ')}`.toLowerCase();
-    return keywords.some(keyword => searchableText.includes(keyword));
-  });
+  if (!localMerchantsDB.some(merchant => merchant.id === merchantId && merchant.isOpen)) return [];
+  const products = localProductsDB.filter(product => product.merchantId === merchantId && product.inStock && product.quantity > 0);
+  if (!query.trim()) return products;
+  return products.filter(product => matchesRequestedProduct(product, query));
 }
 
-// Get all products for a merchant.
 export async function getMerchantProducts(merchantId: string): Promise<Product[]> {
   if (!localMerchantsDB.some(merchant => merchant.id === merchantId)) return [];
-  return localProductsDB.filter(product => product.merchantId === merchantId && product.inStock);
+  return localProductsDB.filter(product => product.merchantId === merchantId && product.inStock && product.quantity > 0);
 }
 
-// Legacy sync functions for backward compatibility.
 export function searchMerchantsSync(query: string): Merchant[] {
-  const q = query.toLowerCase();
-  const keywords = q.split(/\s+/).filter(word => word.length > 2);
-
-  return merchantsDB.filter(merchant => {
-    return keywords.some(keyword =>
-      merchant.category.some(cat => cat.includes(keyword)) ||
-      merchant.type.toLowerCase().includes(keyword) ||
-      merchant.name.toLowerCase().includes(keyword)
-    ) || merchant.category.some(cat => q.includes(cat));
-  }).filter(m => m.isOpen);
+  const terms = catalogRequestTerms(query);
+  return merchantsDB.filter(merchant => merchant.isOpen && (
+    localProductsDB.some(product => product.merchantId === merchant.id && product.inStock && product.quantity > 0 && matchesRequestedProduct(product, query)) ||
+    (!hasProductIntent(query) && containsTerm(`${merchant.name} ${merchant.type} ${merchant.category.join(' ')}`, terms))
+  ));
 }
 
 export function searchProductsSync(merchantId: string, query: string): Product[] {
-  const q = query.toLowerCase();
-  const keywords = q.split(/\s+/).filter(word => word.length > 2);
-
-  const merchantProducts = localProductsDB.filter(p => p.merchantId === merchantId && p.inStock);
-
-  if (keywords.length > 0) {
-    return merchantProducts.filter(product =>
-      keywords.some(keyword =>
-        product.tags.some(tag => tag?.includes(keyword)) ||
-        product.name.toLowerCase().includes(keyword) ||
-        product.category.toLowerCase().includes(keyword) ||
-        product.description.toLowerCase().includes(keyword)
-      )
-    );
-  }
-
-  return merchantProducts;
+  return localProductsDB.filter(product => product.merchantId === merchantId && product.inStock && product.quantity > 0 && (!query.trim() || matchesRequestedProduct(product, query)));
 }
 
-// For backward compatibility
 export const productsDB = localProductsDB;
