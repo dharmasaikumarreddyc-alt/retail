@@ -1,4 +1,4 @@
-name: Deploy Loopora to Cloud Run
+name: Deploy Loopora Web to Cloud Run
 
 on:
   push:
@@ -11,41 +11,24 @@ permissions:
   id-token: write
 
 concurrency:
-  group: loopora-production-deploy
+  group: loopora-web-production
   cancel-in-progress: true
 
 env:
   GCP_PROJECT_ID: project-08a199a1-b3a6-4e7d-b5f
-  GCP_PROJECT_NUMBER: "106222300318"
   FRONTEND_SERVICE: loopora-web
   FRONTEND_REGION: asia-south1
-  ARTIFACT_REGION: us-central1
-  ARTIFACT_REPOSITORY: retail
-  FRONTEND_IMAGE_NAME: aisle-web
+  RUNTIME_SERVICE_ACCOUNT: aisle-runner@project-08a199a1-b3a6-4e7d-b5f.iam.gserviceaccount.com
+  NEXT_PUBLIC_BACKEND_URL: https://loopora-api-c23fcesjzq-el.a.run.app
 
 jobs:
   deploy:
-    name: Build and deploy production
+    name: Build, deploy, and verify
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout main
         uses: actions/checkout@v4
-
-      - name: Verify Google Cloud federation settings
-        shell: bash
-        env:
-          WIF_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          DEPLOY_SERVICE_ACCOUNT: ${{ vars.GCP_SERVICE_ACCOUNT }}
-        run: |
-          set -euo pipefail
-          if [[ -z "${WIF_PROVIDER}" || -z "${DEPLOY_SERVICE_ACCOUNT}" ]]; then
-            echo "Google Cloud Workload Identity Federation is not connected yet."
-            echo "Set these repository variables once:"
-            echo "GCP_WORKLOAD_IDENTITY_PROVIDER"
-            echo "GCP_SERVICE_ACCOUNT"
-            exit 1
-          fi
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
@@ -59,143 +42,23 @@ jobs:
         with:
           project_id: ${{ env.GCP_PROJECT_ID }}
 
-      - name: Confirm Google Cloud project
+      - name: Validate production build
         shell: bash
-        run: |
-          set -euo pipefail
-          gcloud config set project "${GCP_PROJECT_ID}"
-          echo "Project: $(gcloud config get-value project)"
-
-      - name: Detect existing backend service
-        id: backend
-        shell: bash
-        env:
-          BACKEND_SERVICE_OVERRIDE: ${{ vars.GCP_BACKEND_SERVICE }}
-          BACKEND_REGION_OVERRIDE: ${{ vars.GCP_BACKEND_REGION }}
-        run: |
-          set -euo pipefail
-
-          SERVICES="$(gcloud run services list \
-            --platform=managed \
-            --project "${GCP_PROJECT_ID}" \
-            --format='value(metadata.name)')"
-
-          if [[ -n "${BACKEND_SERVICE_OVERRIDE}" ]]; then
-            BACKEND_SERVICE="${BACKEND_SERVICE_OVERRIDE}"
-          else
-            BACKEND_SERVICE=""
-            for candidate in loopora-api aisle-api; do
-              if printf '%s\n' "${SERVICES}" | grep -Fxq "${candidate}"; then
-                BACKEND_SERVICE="${candidate}"
-                break
-              fi
-            done
-
-            if [[ -z "${BACKEND_SERVICE}" ]]; then
-              BACKEND_SERVICE="$(printf '%s\n' "${SERVICES}" \
-                | grep -Fvx "${FRONTEND_SERVICE}" \
-                | grep -Ei '(api|backend)' \
-                | head -n1 || true)"
-            fi
-          fi
-
-          if [[ -z "${BACKEND_SERVICE}" ]]; then
-            echo "Could not detect the existing backend Cloud Run service."
-            echo "Available services:"
-            printf '%s\n' "${SERVICES}"
-            echo "Set repository variable GCP_BACKEND_SERVICE if needed."
-            exit 1
-          fi
-
-          if [[ -n "${BACKEND_REGION_OVERRIDE}" ]]; then
-            BACKEND_REGION="${BACKEND_REGION_OVERRIDE}"
-          else
-            BACKEND_ROW="$(gcloud run services list \
-              --platform=managed \
-              --project "${GCP_PROJECT_ID}" \
-              --format="csv[no-heading](metadata.name,metadata.labels.'cloud.googleapis.com/location')" \
-              | grep -F "${BACKEND_SERVICE}," \
-              | head -n1 || true)"
-            BACKEND_REGION="${BACKEND_ROW#*,}"
-          fi
-
-          if [[ -z "${BACKEND_REGION}" || "${BACKEND_REGION}" == "${BACKEND_ROW:-}" ]]; then
-            echo "Could not detect region for backend service ${BACKEND_SERVICE}."
-            echo "Set repository variable GCP_BACKEND_REGION if needed."
-            exit 1
-          fi
-
-          echo "service=${BACKEND_SERVICE}" >> "${GITHUB_OUTPUT}"
-          echo "region=${BACKEND_REGION}" >> "${GITHUB_OUTPUT}"
-          echo "Backend service: ${BACKEND_SERVICE} (${BACKEND_REGION})"
-
-      - name: Validate backend Python
-        shell: bash
-        run: python3 -m compileall -q backend
-
-      - name: Deploy backend
-        shell: bash
-        run: |
-          set -euo pipefail
-          gcloud run deploy "${{ steps.backend.outputs.service }}" \
-            --source backend \
-            --region "${{ steps.backend.outputs.region }}" \
-            --project "${GCP_PROJECT_ID}" \
-            --quiet
-
-      - name: Read backend URL
-        id: backend_url
-        shell: bash
-        run: |
-          set -euo pipefail
-          BACKEND_URL="$(gcloud run services describe "${{ steps.backend.outputs.service }}" \
-            --region "${{ steps.backend.outputs.region }}" \
-            --project "${GCP_PROJECT_ID}" \
-            --format='value(status.url)')"
-          if [[ -z "${BACKEND_URL}" ]]; then
-            echo "Backend URL was not returned after deployment."
-            exit 1
-          fi
-          echo "url=${BACKEND_URL}" >> "${GITHUB_OUTPUT}"
-          echo "Backend URL: ${BACKEND_URL}"
-
-      - name: Validate frontend production build
-        shell: bash
-        env:
-          NEXT_PUBLIC_BACKEND_URL: ${{ steps.backend_url.outputs.url }}
         run: |
           set -euo pipefail
           npm ci
           npm run build
 
-      - name: Verify Artifact Registry repository
-        shell: bash
-        run: |
-          set -euo pipefail
-          gcloud artifacts repositories describe "${ARTIFACT_REPOSITORY}" \
-            --location "${ARTIFACT_REGION}" \
-            --project "${GCP_PROJECT_ID}"
-
-      - name: Build frontend image with backend URL
-        shell: bash
-        run: |
-          set -euo pipefail
-          IMAGE="${ARTIFACT_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/${ARTIFACT_REPOSITORY}/${FRONTEND_IMAGE_NAME}:${GITHUB_SHA}"
-          echo "IMAGE=${IMAGE}" >> "${GITHUB_ENV}"
-          gcloud builds submit \
-            --project "${GCP_PROJECT_ID}" \
-            --config cloudbuild.frontend.yaml \
-            --substitutions="_BACKEND_URL=${{ steps.backend_url.outputs.url }},_IMAGE=${IMAGE}" \
-            .
-
-      - name: Deploy frontend
+      - name: Deploy existing Cloud Run service
         shell: bash
         run: |
           set -euo pipefail
           gcloud run deploy "${FRONTEND_SERVICE}" \
-            --image "${IMAGE}" \
+            --source . \
             --region "${FRONTEND_REGION}" \
             --project "${GCP_PROJECT_ID}" \
+            --service-account "${RUNTIME_SERVICE_ACCOUNT}" \
+            --allow-unauthenticated \
             --quiet
 
           gcloud run services update-traffic "${FRONTEND_SERVICE}" \
@@ -204,7 +67,7 @@ jobs:
             --to-latest \
             --quiet
 
-      - name: Verify deployment
+      - name: Verify live routes
         shell: bash
         run: |
           set -euo pipefail
@@ -216,24 +79,14 @@ jobs:
             --region "${FRONTEND_REGION}" \
             --project "${GCP_PROJECT_ID}" \
             --format='value(status.latestReadyRevisionName)')"
-          BACKEND_REVISION="$(gcloud run services describe "${{ steps.backend.outputs.service }}" \
-            --region "${{ steps.backend.outputs.region }}" \
-            --project "${GCP_PROJECT_ID}" \
-            --format='value(status.latestReadyRevisionName)')"
 
-          echo "Frontend URL: ${FRONTEND_URL}"
-          echo "Frontend revision: ${FRONTEND_REVISION}"
-          echo "Backend URL: ${{ steps.backend_url.outputs.url }}"
-          echo "Backend revision: ${BACKEND_REVISION}"
-
-          curl --fail --silent --show-error --retry 5 --retry-delay 3 "${FRONTEND_URL}/" >/dev/null
-          curl --fail --silent --show-error --retry 5 --retry-delay 3 "${FRONTEND_URL}/login" >/dev/null
-          curl --fail --silent --show-error --retry 5 --retry-delay 3 "${FRONTEND_URL}/merchant/login" >/dev/null
+          for route in / /shop /cart-pilot /login /merchant/login; do
+            curl --fail --silent --show-error --retry 5 --retry-delay 3 "${FRONTEND_URL}${route}" >/dev/null
+          done
 
           {
-            echo "### Loopora deployment"
-            echo "- Frontend: ${FRONTEND_URL}"
-            echo "- Frontend revision: ${FRONTEND_REVISION}"
-            echo "- Backend: ${{ steps.backend_url.outputs.url }}"
-            echo "- Backend revision: ${BACKEND_REVISION}"
+            echo "### Loopora web deployment"
+            echo "- URL: ${FRONTEND_URL}"
+            echo "- Revision: ${FRONTEND_REVISION}"
+            echo "- Routes checked: /, /shop, /cart-pilot, /login, /merchant/login"
           } >> "${GITHUB_STEP_SUMMARY}"

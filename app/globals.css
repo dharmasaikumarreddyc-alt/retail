@@ -281,8 +281,9 @@ html[data-theme="forest"] {
 .agent-cursor { animation: agent-blink 1s steps(1) infinite; color: var(--primary); }
 @keyframes agent-blink { 50% { opacity: 0; } }
 
-/* Hide the template's floating "support" button (bottom-left headset). */
+/* The legacy theme must never expose its vendor support or purchase links. */
 .DZ-bt-support-now,
+.DZ-bt-buy-now,
 .dz-bt-support,
 .support-now {
   display: none !important;
